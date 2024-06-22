@@ -14,10 +14,10 @@ const rootDir = resolve(__dirname);
 
 const handlebarsPlugin = handlebars({
   context: {
-    title: 'Telegram Web',
-    description: 'Telegram is a cloud-based mobile and desktop messaging app with a focus on security and speed.',
-    url: 'https://web.telegram.org/k/',
-    origin: 'https://web.telegram.org/'
+    title: 'SimonMY TG',
+    description: 'SimonMY TG',
+    url: 'https://tg.simonmy.com/',
+    origin: 'https://tg.simonmy.com/'
   }
 });
 

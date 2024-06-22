@@ -245,7 +245,7 @@ export class AppSidebarLeft extends SidebarSlider {
           sessionStorage.set({kz_version: 'Z'}),
           sessionStorage.delete('tgme_sync')
         ]).then(() => {
-          location.href = 'https://web.telegram.org/a/';
+          location.href = 'https://tg.simonmy.com/';
         });
       },
       verify: () => App.isMainDomain
