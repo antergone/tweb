@@ -104,6 +104,15 @@ export interface MTAppConfig {
   new_noncontact_peers_require_premium_without_ownpremium?: boolean;
   stars_purchase_blocked?:                   boolean;
   can_edit_factcheck?:                       boolean;
+  stories_pinned_to_top_count_max?:          number;
+  stars_paid_post_amount_max?:               number;
+  stars_gifts_enabled?:                      boolean;
+  stars_paid_reaction_amount_max?:           number;
+  stars_purchase_blocked?:                   boolean;
+  stars_revenue_withdrawal_min?:             number;
+  stars_subscription_amount_max?:            number;
+  stars_usd_sell_rate_x1000?:                number;
+  stars_usd_withdraw_rate_x1000?:            number;
 }
 
 export interface EmojiesSendDiceSuccess {

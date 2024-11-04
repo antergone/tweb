@@ -25,7 +25,8 @@ export type ReferenceContext =
   ReferenceContext.referenceContextWebPage |
   ReferenceContext.referenceContextBotApp |
   ReferenceContext.referenceContextChatInvite |
-  ReferenceContext.referenceContextEffects;
+  ReferenceContext.referenceContextEffects |
+  ReferenceContext.referenceContextStarsTransaction;
 
 export namespace ReferenceContext {
   export type referenceContextProfilePhoto = {
@@ -95,6 +96,12 @@ export namespace ReferenceContext {
 
   export type referenceContextEffects = {
     type: 'effects'
+  };
+
+  export type referenceContextStarsTransaction = {
+    type: 'starsTransaction',
+    peerId: PeerId,
+    mid: number
   };
 }
 
@@ -166,6 +173,7 @@ export class ReferenceDatabase extends AppManager {
           contexts.delete(_context);
           if(!contexts.size) {
             this.contexts.delete(reference);
+            this.apiFileManager.cancelDownloadByReference(reference);
             delete this.links[bytesToHex(reference)];
           }
           return true;

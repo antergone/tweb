@@ -20,8 +20,9 @@ import type {MyDocument} from './appManagers/appDocsManager';
 import type {MTAppConfig} from './mtproto/appConfig';
 import type StoriesCacheType from './appManagers/utils/stories/cacheType';
 import type {StoriesListPosition} from './appManagers/appStoriesManager';
+import type {ArgumentTypes} from '../types';
 import {NULL_PEER_ID, UserAuth} from './mtproto/mtproto_config';
-import EventListenerBase from '../helpers/eventListenerBase';
+import EventListenerBase, {EventListenerListeners} from '../helpers/eventListenerBase';
 import {MOUNT_CLASS_TO} from '../config/debug';
 import MTProtoMessagePort from './mtproto/mtprotoMessagePort';
 import {IS_WORKER} from '../helpers/context';
@@ -98,7 +99,7 @@ export type BroadcastEvents = {
   'messages_downloaded': {peerId: PeerId, mids: number[]},
   'messages_media_read': {peerId: PeerId, mids: number[]},
 
-  'story_update': {peerId: PeerId, story: StoryItem, modifiedPinned?: boolean, modifiedArchive?: boolean},
+  'story_update': {peerId: PeerId, story: StoryItem, modifiedPinned?: boolean, modifiedArchive?: boolean, modifiedPinnedToTop?: boolean},
   'story_deleted': {peerId: PeerId, id: number},
   'story_expired': {peerId: PeerId, id: number},
   'story_new': {peerId: PeerId, story: StoryItem, cacheType: StoriesCacheType, maxReadId: number},
@@ -252,9 +253,11 @@ export class RootScope extends EventListenerBase<BroadcastEventsListeners> {
     return this.premium;
   }
 
-  public dispatchEventSingle(...args: any[]) {
-    // @ts-ignore
-    super.dispatchEvent(...args);
+  public dispatchEventSingle<L extends EventListenerListeners = BroadcastEventsListeners, T extends keyof L = keyof L>(
+    name: T,
+    ...args: ArgumentTypes<L[T]>
+  ) {
+    super.dispatchEvent(name, ...args);
   }
 }
 

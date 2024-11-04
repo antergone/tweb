@@ -26,10 +26,10 @@ import ripple from '../ripple';
 import {fireMessageEffectByBubble, MessageRender} from './messageRender';
 import LazyLoadQueue from '../lazyLoadQueue';
 import ListenerSetter from '../../helpers/listenerSetter';
-import PollElement from '../poll';
+import PollElement, {setQuizHint} from '../poll';
 import AudioElement from '../audio';
-import {ChannelParticipant, Chat as MTChat, ChatInvite, ChatParticipant, Document, Message, MessageEntity,  MessageMedia,  MessageReplyHeader, Photo, PhotoSize, ReactionCount, SponsoredMessage, User, WebPage, WebPageAttribute, Reaction, BotApp, DocumentAttribute, InputStickerSet, TextWithEntities, FactCheck} from '../../layer';
-import {BOT_START_PARAM, NULL_PEER_ID, REPLIES_PEER_ID, SEND_WHEN_ONLINE_TIMESTAMP} from '../../lib/mtproto/mtproto_config';
+import {ChannelParticipant, Chat as MTChat, ChatInvite, ChatParticipant, Document, Message, MessageEntity,  MessageMedia,  MessageReplyHeader, Photo, PhotoSize, ReactionCount, SponsoredMessage, User, WebPage, WebPageAttribute, Reaction, BotApp, DocumentAttribute, InputStickerSet, TextWithEntities, FactCheck, WebDocument, MessageExtendedMedia} from '../../layer';
+import {BOT_START_PARAM, NULL_PEER_ID, REPLIES_PEER_ID, SEND_WHEN_ONLINE_TIMESTAMP, STARS_CURRENCY} from '../../lib/mtproto/mtproto_config';
 import {FocusDirection, ScrollStartCallbackDimensions} from '../../helpers/fastSmoothScroll';
 import useHeavyAnimationCheck, {getHeavyAnimationPromise, dispatchHeavyAnimationEvent, interruptHeavyAnimation} from '../../hooks/useHeavyAnimationCheck';
 import {fastRaf, fastRafPromise} from '../../helpers/schedulers';
@@ -63,7 +63,6 @@ import IS_CALL_SUPPORTED from '../../environment/callSupport';
 import Button from '../button';
 import {CallType} from '../../lib/calls/types';
 import getVisibleRect from '../../helpers/dom/getVisibleRect';
-import PopupJoinChatInvite from '../popups/joinChatInvite';
 import {InternalLink, INTERNAL_LINK_TYPE} from '../../lib/appManagers/internalLink';
 import ReactionsElement, {REACTIONS_ELEMENTS} from './reactions';
 import type ReactionElement from './reaction';
@@ -183,6 +182,8 @@ import clearfix from '../../helpers/dom/clearfix';
 import {usePeer} from '../../stores/peers';
 import safeWindowOpen from '../../helpers/dom/safeWindowOpen';
 import findAndSplice from '../../helpers/array/findAndSplice';
+import generatePhotoForExtendedMediaPreview from '../../lib/appManagers/utils/photos/generatePhotoForExtendedMediaPreview';
+import icon from '../icon';
 
 export const USER_REACTIONS_INLINE = false;
 export const TEST_BUBBLES_DELETION = false;
@@ -312,7 +313,7 @@ export function splitFullMid(fullMid: FullMid) {
 const EMPTY_FULL_MID = makeFullMid(NULL_PEER_ID, 0);
 
 function appendBubbleTime(bubble: HTMLElement, element: HTMLElement, callback: () => void) {
-  bubble.timeAppenders.unshift({element, callback});
+  (bubble.timeAppenders ??= []).unshift({element, callback});
   callback();
 }
 
@@ -1243,7 +1244,8 @@ export default class ChatBubbles {
           findUpClassName(e.target, 'document') ||
           findUpClassName(e.target, 'contact') ||
           findUpClassName(e.target, 'time') ||
-          findUpClassName(e.target, 'code-header-button')
+          findUpClassName(e.target, 'code-header-button') ||
+          findUpClassName(e.target, 'reaction')
         ) {
           return;
         }
@@ -1536,10 +1538,14 @@ export default class ChatBubbles {
       }
     });
 
-    this.listenerSetter.add(rootScope)('history_reload', (peerId) => {
+    this.listenerSetter.add(rootScope)('history_reload', async(peerId) => {
       if(peerId !== this.peerId) {
         return;
       }
+
+      const wasLikeGroup = this.chat.isLikeGroup;
+      this.chat.isLikeGroup = await this.chat._isLikeGroup(peerId);
+      const finishPeerChange = wasLikeGroup !== this.chat.isLikeGroup &&  await this.finishPeerChange();
 
       // * filter local and outgoing
       const fullMids = this.getRenderedHistory('desc', true);
@@ -1564,6 +1570,17 @@ export default class ChatBubbles {
             toDelete.push(fullMid);
           }
         });
+
+        finishPeerChange?.();
+        if(finishPeerChange) {
+          this.bubbleGroups.groups.forEach((group) => {
+            if(!this.chat.isLikeGroup) {
+              group.destroyAvatar();
+            } else if(this.chat.isAvatarNeeded(group.firstItem.message)) {
+              group.createAvatar(group.firstItem.message);
+            }
+          });
+        }
 
         this.deleteMessagesByIds(toDelete);
 
@@ -2257,15 +2274,6 @@ export default class ChatBubbles {
       return;
     }
 
-    const mediaSpoiler: HTMLElement = findUpClassName(target, 'media-spoiler-container');
-    if(mediaSpoiler) {
-      onMediaSpoilerClick({
-        event: e,
-        mediaSpoiler
-      });
-      return;
-    }
-
     const contactDiv: HTMLElement = findUpClassName(target, 'contact');
     if(contactDiv) {
       const peerId = contactDiv.dataset.peerId.toPeerId();
@@ -2298,9 +2306,40 @@ export default class ChatBubbles {
         return;
       }
 
-      PopupPayment.create({
+      const media = (message as Message.message).media;
+      const paidMedia = media?._ === 'messageMediaPaidMedia' ? media : undefined;
+
+      const popup = await PopupPayment.create({
         message: message as Message.message,
-        inputInvoice: await this.managers.appPaymentsManager.getInputInvoiceByPeerId(message.peerId, message.mid)
+        inputInvoice: await this.managers.appPaymentsManager.getInputInvoiceByPeerId(message.peerId, message.mid),
+        paidMedia
+      });
+
+      if(paidMedia) {
+        popup.addEventListener('finish', async(result) => {
+          if(result === 'paid') {
+            setQuizHint({
+              icon: 'cash_circle',
+              title: i18n('StarsMediaPurchaseCompleted'),
+              textElement: i18n('StarsMediaPurchaseCompletedInfo', [
+                paidMedia.stars_amount,
+                await wrapPeerTitle({peerId: (message as Message.message).fwdFromId || message.peerId})
+              ]),
+              appendTo: this.container,
+              from: 'top',
+              duration: 5000
+            });
+          }
+        });
+      }
+      return;
+    }
+
+    const mediaSpoiler: HTMLElement = findUpClassName(target, 'media-spoiler-container');
+    if(mediaSpoiler) {
+      onMediaSpoilerClick({
+        event: e,
+        mediaSpoiler
       });
       return;
     }
@@ -2331,7 +2370,7 @@ export default class ChatBubbles {
         this.chat.initSearch({reaction: reaction});
       } else {
         const message = reactionsElement.getContext();
-        this.chat.sendReaction({message, reaction: reaction});
+        this.chat.sendReaction({message, reaction});
       }
 
       return;
@@ -2673,11 +2712,17 @@ export default class ChatBubbles {
       }
 
       cancelEvent(e);
-      const fullMessageId = getBubbleFullMid(groupedItem || bubble);
-      const message = this.chat.getMessage(fullMessageId);
+      const groupedItemIndex = groupedItem ? +(groupedItem.dataset.index ?? -1) : -1;
+      const fullMessageId = getBubbleFullMid(groupedItemIndex !== -1 ? bubble : groupedItem || bubble);
+      let message = this.chat.getMessage(fullMessageId), isSponsored = false;
       if(!message) {
-        this.log.warn('no message by messageId:', fullMessageId);
-        return;
+        if(splitFullMid(fullMessageId).mid < 0) {
+          message = (bubble as any).message;
+          isSponsored = true;
+        } else {
+          this.log.warn('no message by messageId:', fullMessageId);
+          return;
+        }
       }
 
       if(bubble.classList.contains('story')) {
@@ -2692,7 +2737,7 @@ export default class ChatBubbles {
         return;
       }
 
-      const SINGLE_MEDIA_CLASSNAME = 'has-webpage';
+      const SINGLE_MEDIA_CLASSNAME = 'single-media';
       const isSingleMedia = bubble.classList.contains(SINGLE_MEDIA_CLASSNAME);
 
       const f = documentDiv ? (media: any) => {
@@ -2701,7 +2746,7 @@ export default class ChatBubbles {
         return media._ === 'photo' || ['video', 'gif'].includes(media.type);
       };
 
-      const targets: {element: HTMLElement, mid: number, peerId: PeerId, fullMid: string}[] = [];
+      const targets: {element: HTMLElement, mid: number, peerId: PeerId, fullMid: string, index?: number}[] = [];
       const fullMids = isSingleMedia ? [fullMessageId] : this.getRenderedHistory('asc').map((fullMid) => {
         const bubble = this.getBubble(fullMid);
         if(!isSingleMedia && bubble.classList.contains(SINGLE_MEDIA_CLASSNAME)) {
@@ -2762,11 +2807,13 @@ export default class ChatBubbles {
             const parent = albumItem || element.parentElement;
             if(parents.has(parent)) return;
             parents.add(parent);
+            const _fullMid = groupedItemIndex !== -1 ? fullMid : getBubbleFullMid(albumItem || element) || fullMid;
             targets.push({
               element,
-              mid: albumItem ? +albumItem.dataset.mid : splitFullMid(fullMid).mid,
+              mid: splitFullMid(_fullMid).mid,
               peerId: this.peerId,
-              fullMid: albumItem ? getBubbleFullMid(albumItem) : fullMid
+              fullMid: _fullMid,
+              index: albumItem && +(albumItem.dataset.index ?? -1)
             });
           });
         }
@@ -2780,9 +2827,9 @@ export default class ChatBubbles {
         }
       });
 
-      targets.sort((a, b) => a.mid - b.mid);
+      // targets.sort((a, b) => a.mid - b.mid);
 
-      const idx = targets.findIndex((t) => t.fullMid === fullMessageId);
+      const idx = groupedItemIndex === -1 ? targets.findIndex((t) => t.fullMid === fullMessageId) : targets.findIndex((t) => t.index === groupedItemIndex);
 
       if(DEBUG) {
         this.log('open mediaViewer single with ids:', fullMids, idx, targets);
@@ -2793,7 +2840,7 @@ export default class ChatBubbles {
         return;
       }
 
-      new AppMediaViewer()
+      new AppMediaViewer(undefined, isSponsored)
       .setSearchContext({
         threadId: this.chat.threadId,
         peerId: this.peerId,
@@ -2803,6 +2850,7 @@ export default class ChatBubbles {
       })
       .openMedia({
         message: message,
+        index: targets[idx].index,
         target: targets[idx].element,
         fromRight: 0,
         reverse: true,
@@ -4576,10 +4624,10 @@ export default class ChatBubbles {
   }
 
   public async finishPeerChange() {
-    const [isBroadcast, canWrite, isAnyGroup] = await Promise.all([
+    const [isBroadcast, canWrite, isLikeGroup] = await Promise.all([
       this.chat.isBroadcast,
       this.chat.canSend(),
-      this.chat.isAnyGroup
+      this.chat.isLikeGroup
     ]);
 
     return () => {
@@ -4587,7 +4635,7 @@ export default class ChatBubbles {
       this.container.classList.toggle('is-chat-input-hidden', !canWrite);
 
       [this.chatInner, this.remover].forEach((element) => {
-        element.classList.toggle('is-chat', isAnyGroup);
+        element.classList.toggle('is-chat', isLikeGroup);
         element.classList.toggle('is-broadcast', isBroadcast);
       });
 
@@ -4790,9 +4838,17 @@ export default class ChatBubbles {
     const groups = this.bubbleGroups.groupUngrouped();
 
     const avatarPromises = Array.from(groups).map((group) => {
-      if(group.avatar) return;
       const firstItem = group.firstItem;
-      if(firstItem && this.chat.isAvatarNeeded(firstItem.message)) {
+      if(!firstItem) {
+        return;
+      }
+
+      const shouldHaveAvatar = this.chat.isAvatarNeeded(firstItem.message);
+      if(shouldHaveAvatar) {
+        if(group.avatar) {
+          return;
+        }
+
         return group.createAvatar(firstItem.message);
       }
     }).filter(Boolean);
@@ -5132,7 +5188,66 @@ export default class ChatBubbles {
       if(action) {
         const isGiftCode = action._ === 'messageActionGiftCode';
         let promise: Promise<any>;
-        if(isGiftCode && !shouldDisplayGiftCodeAsGift(action)) {
+        if(action._ === 'messageActionGiftStars' || action._ === 'messageActionPrizeStars') {
+          const content = bubbleContainer.cloneNode(false) as HTMLElement;
+          content.classList.add('has-service-before');
+          const service = s.cloneNode(false) as HTMLElement;
+
+          // s.append(i18n(message.fromId === rootScope.myId ? 'ActionGiftOutbound' : 'ActionGiftInbound', [await wrapPeerTitle({peerId: message.peerId}), paymentsWrapCurrencyAmount(action.amount, action.currency)]));
+          s.append(await wrapMessageActionTextNew({message, middleware}));
+
+          const isSent = message.fromId === rootScope.myId;
+          const isPrize = action._ === 'messageActionPrizeStars';
+
+          let subtitle: HTMLElement;
+          if(isPrize) {
+            subtitle = i18n(
+              'Action.StarGiveawayPrize',
+              [+action.stars, await wrapPeerTitle({peerId: getPeerId(action.boost_peer)})]
+            );
+          } else {
+            subtitle = i18n(isSent ? 'ActionGiftStarsSubtitle' : 'ActionGiftStarsSubtitleYou', [await wrapPeerTitle({peerId: message.peerId})]);
+          }
+
+          const title = i18n(isPrize ? 'BoostingCongratulations' : 'ActionGiftStarsTitle', [action.stars]);
+          title.classList.add('text-bold');
+          this.wrapGift({
+            content,
+            service,
+            middleware,
+            loadPromises,
+            assetName: 'Gift3',
+            title,
+            subtitle,
+            buttonText: 'ActionGiftPremiumView',
+            buttonCallback: async() => {
+              PopupPayment.create({
+                message: message as Message.message,
+                noPaymentForm: true,
+                transaction: {
+                  _: 'starsTransaction',
+                  date: message.date,
+                  id: action.transaction_id || (isSent ? '' : '1'),
+                  peer: {
+                    _: 'starsTransactionPeer',
+                    peer: isPrize ? action.boost_peer : {
+                      _: 'peerUser',
+                      user_id: isSent ? message.peerId : rootScope.myId
+                    }
+                  },
+                  pFlags: {
+                    gift: isPrize ? undefined : true
+                  },
+                  stars: action.stars,
+                  giveaway_post_id: isPrize ? action.giveaway_msg_id : undefined
+                }
+              });
+            }
+          });
+
+          content.append(service);
+          bubbleContainer.after(content);
+        } else if(isGiftCode && !shouldDisplayGiftCodeAsGift(action)) {
           const isUnclaimed = action.pFlags.unclaimed;
           const isGiveaway = action.pFlags.via_giveaway;
           const title = i18n(isUnclaimed ? 'BoostingUnclaimedPrize' : 'BoostingCongratulations');
@@ -5183,7 +5298,6 @@ export default class ChatBubbles {
         if(action._ === 'messageActionGiftPremium' || (isGiftCode && shouldDisplayGiftCodeAsGift(action))) {
           const content = bubbleContainer.cloneNode(false) as HTMLElement;
           content.classList.add('has-service-before');
-
           const service = s.cloneNode(false) as HTMLElement;
 
           const months = action.months;
@@ -5614,7 +5728,7 @@ export default class ChatBubbles {
     const isOut = this.chat.isOutMessage(message);
     const haveRTLChar = isRTL(messageMessage, true);
 
-    let timeSpan: HTMLElement;
+    let timeSpan: HTMLElement, _clearfix: HTMLElement;
     if(!isSponsored) {
       timeSpan = bubble.timeSpan = MessageRender.setTime({
         chat: this.chat,
@@ -5626,7 +5740,6 @@ export default class ChatBubbles {
         loadPromises
       });
 
-      bubble.timeAppenders = [];
       let _clearfix: HTMLElement;
       appendBubbleTime(bubble, messageDiv, () => {
         messageDiv.append(timeSpan, _clearfix ??= clearfix());
@@ -5792,9 +5905,10 @@ export default class ChatBubbles {
 
     let nameContainer: HTMLElement = bubbleContainer;
 
+    const hasPostAuthor = isMessage && message.post_author && !this.chat.isLikeGroup;
     const canHideNameIfMedia = !message.viaBotId &&
       (message.fromId === rootScope.myId || !message.pFlags.out) &&
-      (!(message as Message.message).post_author || !fwdFrom) &&
+      (!hasPostAuthor || !fwdFrom) &&
       !_isForwardOfForward/*  &&
       !fwdFromId */;
       // (!getFwdFromName(fwdFrom) || !fwdFromId);
@@ -5967,6 +6081,10 @@ export default class ChatBubbles {
           const wrapped = wrapUrl(webPage.url);
           const hasSafeUrl = (wrapped.onclick && !UNSAFE_ANCHOR_LINK_TYPES.has(wrapped.onclick)) || isSponsored;
           if(hasSafeUrl) {
+            boxRefs.push((box) => {
+              box.setAttribute('safe', '1');
+            });
+
             if(isSponsored) {
               messageDiv.classList.add('margin-bigger');
               const wrapped = wrapUrl(sponsoredMessage.url);
@@ -5984,13 +6102,7 @@ export default class ChatBubbles {
                 // }
 
                 (box as any).callback = () => {
-                  this.chat.appImManager.clickIfSponsoredMessage(message as Message.message);
-
-                  if(wrapped.onclick) {
-                    this.chat.appImManager.openUrl(sponsoredMessage.url);
-                  } else {
-                    safeWindowOpen(wrapped.url);
-                  }
+                  this.chat.appImManager.onSponsoredBoxClick(message as Message.message);
                 };
               });
             } else {
@@ -6021,7 +6133,9 @@ export default class ChatBubbles {
             });
           }
 
-          bubble.classList.add('has-webpage');
+          bubble.classList.add('has-webpage', 'single-media');
+
+          const sponsoredMedia = sponsoredMessage?.media;
 
           let preview: HTMLDivElement;
           const doc = webPage.document as MyDocument;
@@ -6041,6 +6155,8 @@ export default class ChatBubbles {
             };
           }
 
+          const lazyLoadQueue = sponsoredMedia ? undefined : this.lazyLoadQueue;
+
           if(doc) {
             if(doc.type === 'gif' || doc.type === 'video' || doc.type === 'round') {
               const mediaSize = doc.type === 'round' ? mediaSizes.active.round : mediaSizes.active.webpage;
@@ -6057,13 +6173,13 @@ export default class ChatBubbles {
                 message: message as Message.message,
                 boxWidth: mediaSize.width,
                 boxHeight: mediaSize.height,
-                lazyLoadQueue: this.lazyLoadQueue,
+                lazyLoadQueue,
                 middleware: this.getMiddleware(),
                 isOut,
                 group: this.chat.animationGroup,
                 loadPromises,
                 autoDownload: this.chat.autoDownload,
-                noInfo: message.mid < 0,
+                noInfo: message.mid < 0 && !sponsoredMedia,
                 observer: this.observer,
                 setShowControlsOn: bubble
               });
@@ -6071,7 +6187,7 @@ export default class ChatBubbles {
               const docDiv = await wrapDocument({
                 message: message as Message.message,
                 autoDownloadSize: this.chat.autoDownload.file,
-                lazyLoadQueue: this.lazyLoadQueue,
+                lazyLoadQueue,
                 loadPromises,
                 sizeType: 'documentName',
                 searchContext: {
@@ -6134,7 +6250,7 @@ export default class ChatBubbles {
             bubble.classList.add('photo');
 
             const squareBoxSize = 48;
-            const size: PhotoSize.photoSize = !sponsoredMessage && photo.sizes[photo.sizes.length - 1] as any;
+            const size: PhotoSize.photoSize = (!sponsoredMessage || sponsoredMedia) && photo.sizes[photo.sizes.length - 1] as any;
             if((!size || (size.w === size.h && !hasLargeMedia) || hasSmallMedia) && (props.name || props.title || props.text)) {
               bubble.classList.add('is-square-photo');
               props.media.photoSize = 'square';
@@ -6173,7 +6289,7 @@ export default class ChatBubbles {
               boxWidth: isSquare ? 0 : mediaSizes.active.webpage.width,
               boxHeight: isSquare ? 0 : mediaSizes.active.webpage.height,
               isOut,
-              lazyLoadQueue: this.lazyLoadQueue,
+              lazyLoadQueue,
               middleware,
               loadPromises,
               withoutPreloader: isSquare,
@@ -6416,7 +6532,11 @@ export default class ChatBubbles {
 
             const lastContainer = messageDiv.lastElementChild.querySelector('.document-message') || messageDiv.lastElementChild.querySelector('.document, .audio');
             if(lastContainer) {
-              appendBubbleTime(bubble, lastContainer as HTMLElement, () => lastContainer.append(timeSpan));
+              appendBubbleTime(
+                bubble,
+                lastContainer as HTMLElement,
+                () => lastContainer.append(timeSpan, _clearfix ??= clearfix())
+              );
             }
 
             mediaRequiresMessageDiv = true;
@@ -6478,6 +6598,8 @@ export default class ChatBubbles {
           }
 
           subtitle.prepend(Icon('arrow_next', 'bubble-call-arrow', 'bubble-call-arrow-' + (action.duration !== undefined ? 'green' : 'red')));
+
+          appendBubbleTime(bubble, subtitle, () => subtitle.append(timeSpan));
 
           div.append(title, subtitle);
 
@@ -6550,29 +6672,57 @@ export default class ChatBubbles {
           break;
         }
 
+        case 'messageMediaPaidMedia':
         case 'messageMediaInvoice': {
-          const isTest = messageMedia.pFlags.test;
-          const extendedMedia = messageMedia.extended_media;
-          const isAlreadyPaid = extendedMedia?._ === 'messageExtendedMedia';
-          const isNotPaid = extendedMedia?._ === 'messageExtendedMediaPreview';
-          let innerMedia = isAlreadyPaid ?
-            (extendedMedia.media as MessageMedia.messageMediaPhoto).photo as Photo.photo ||
-              (extendedMedia.media as MessageMedia.messageMediaDocument).document as Document.document :
-            messageMedia.photo;
+          type I = MessageMedia.messageMediaInvoice;
+          type P = MessageMedia.messageMediaPaidMedia;
+          type M = Photo.photo | Document.document | WebDocument;
+          const pFlags = (messageMedia as I).pFlags || {};
+          const isTest = pFlags.test;
+          const isInvoice = messageMedia._ === 'messageMediaInvoice';
+          const extendedMedia = (Array.isArray(messageMedia.extended_media) ? messageMedia.extended_media : [messageMedia.extended_media]).filter(Boolean);
+          const isAlreadyPaid = extendedMedia[0]?._ === 'messageExtendedMedia';
+          const isNotPaid = extendedMedia[0]?._ === 'messageExtendedMediaPreview';
 
-          const wrappedPrice = paymentsWrapCurrencyAmount(messageMedia.total_amount, messageMedia.currency);
+          if(!isInvoice) {
+            bubble.classList.add('single-media');
+            if(canHideNameIfMedia) {
+              bubble.classList.add('hide-name');
+            }
+
+            canHavePlainMediaTail = canPossiblyHavePlainMediaTail;
+          }
+
+          let innerMedia: M | M[], videoTimes: HTMLElement[];
+          if(isInvoice) {
+            innerMedia = (messageMedia as I).photo;
+          } else if(isAlreadyPaid) {
+            innerMedia = extendedMedia.map((media) => {
+              return getMediaFromMessage(media as any as Message.message) as M;
+            });
+          }
+
+          const wrappedPrice = isInvoice ?
+            paymentsWrapCurrencyAmount((messageMedia as I).total_amount, (messageMedia as I).currency) :
+            paymentsWrapCurrencyAmount((messageMedia as P).stars_amount, STARS_CURRENCY);
           let priceEl: HTMLElement;
-          if(!extendedMedia) {
+          if(!extendedMedia.length || (!isInvoice && isAlreadyPaid)) {
             priceEl = document.createElement(innerMedia ? 'span' : 'div');
             const f = document.createDocumentFragment();
-            const l = i18n(messageMedia.receipt_msg_id ? 'PaymentReceipt' : (isTest ? 'PaymentTestInvoice' : 'PaymentInvoice'));
+            const l = i18n((messageMedia as I).receipt_msg_id ? 'PaymentReceipt' : (isTest ? 'PaymentTestInvoice' : 'PaymentInvoice'));
             l.classList.add('text-uppercase');
             const joiner = ' ' + NBSP;
             const p = document.createElement('span');
             p.classList.add('text-bold');
-            p.append(wrappedPrice, joiner);
-            f.append(p, l);
-            if(isTest && messageMedia.receipt_msg_id) {
+            p.append(wrappedPrice);
+            f.append(p);
+            if(isInvoice) {
+              p.append(joiner);
+              f.append(l);
+            } else {
+              priceEl.classList.add('other-side');
+            }
+            if(isTest && (messageMedia as I).receipt_msg_id) {
               const a = document.createElement('span');
               a.classList.add('text-uppercase', 'pre-wrap');
               a.append(joiner + '(Test)');
@@ -6580,38 +6730,64 @@ export default class ChatBubbles {
             }
             setInnerHTML(priceEl, f);
           } else if(isNotPaid) {
+            attachmentDiv.classList.add('is-buy');
             priceEl = document.createElement('span');
             priceEl.classList.add('extended-media-buy');
-            priceEl.append(Icon('premium_lock', 'extended-media-buy-icon'));
-            attachmentDiv.classList.add('is-buy');
-            _i18n(priceEl, 'Checkout.PayPrice', [wrappedPrice]);
+            if(isInvoice) {
+              priceEl.append(
+                Icon('premium_lock', 'extended-media-buy-icon'),
+                i18n('Checkout.PayPrice', [wrappedPrice])
+              );
+            } else {
+              priceEl.append(i18n('PaidMedia.Unlock', [wrappedPrice]));
+            }
 
-            if(extendedMedia.video_duration !== undefined) {
+            videoTimes = extendedMedia.map((extendedMedia) => {
+              const videoDuration = (extendedMedia as MessageExtendedMedia.messageExtendedMediaPreview).video_duration;
+              if(videoDuration === undefined) {
+                return;
+              }
+
               const videoTime = document.createElement('span');
               videoTime.classList.add('video-time');
-              videoTime.textContent = toHHMMSS(extendedMedia.video_duration, false);
-              attachmentDiv.append(videoTime);
+              videoTime.textContent = toHHMMSS(videoDuration, false);
+              return videoTime;
+            });
+
+            if(videoTimes.length === 1 && videoTimes[0]) {
+              attachmentDiv.append(videoTimes[0]);
             }
           }
 
           if(isNotPaid) {
-            (extendedMedia.thumb as PhotoSize.photoStrippedSize).w = extendedMedia.w;
-            (extendedMedia.thumb as PhotoSize.photoStrippedSize).h = extendedMedia.h;
-            innerMedia = {
-              _: 'photo',
-              access_hash: '',
-              pFlags: {},
-              date: 0,
-              dc_id: 0,
-              file_reference: [],
-              id: 0,
-              sizes: [extendedMedia.thumb]
-            };
+            type P = MessageExtendedMedia.messageExtendedMediaPreview;
+            innerMedia = extendedMedia.map((extendedMedia) => {
+              return generatePhotoForExtendedMediaPreview(extendedMedia as P);
+            });
+          }
+
+          if(Array.isArray(innerMedia) && innerMedia.length === 1) {
+            innerMedia = innerMedia[0];
           }
 
           if(innerMedia) {
-            const mediaSize = extendedMedia ? mediaSizes.active.extendedInvoice : mediaSizes.active.invoice;
-            if(innerMedia._ === 'document') {
+            const mediaSize = extendedMedia.length ? mediaSizes.active.extendedInvoice : mediaSizes.active.invoice;
+            if(Array.isArray(innerMedia)) {
+              bubble.classList.add('is-album', 'photo');
+              wrapAlbum({
+                media: innerMedia as (Photo.photo | Document.document)[],
+                attachmentDiv,
+                middleware: this.getMiddleware(),
+                isOut: our,
+                lazyLoadQueue: this.lazyLoadQueue,
+                chat: this.chat,
+                loadPromises,
+                autoDownload: this.chat.autoDownload,
+                spoilered: !isAlreadyPaid,
+                videoTimes,
+                uploadingFileName: (message as Message.message).uploadingFileName
+              });
+            } else if(innerMedia._ === 'document') {
               wrapVideo({
                 doc: innerMedia,
                 container: attachmentDiv,
@@ -6625,7 +6801,8 @@ export default class ChatBubbles {
                 group: this.chat.animationGroup,
                 message: message as Message.message,
                 observer: this.observer,
-                setShowControlsOn: bubble
+                setShowControlsOn: bubble,
+                uploadingFileName: (message as Message.message).uploadingFileName[0]
               });
               bubble.classList.add('video');
             } else {
@@ -6645,7 +6822,7 @@ export default class ChatBubbles {
             }
 
             if(priceEl) {
-              if(!extendedMedia) {
+              if(!extendedMedia.length || (!isInvoice && isAlreadyPaid)) {
                 priceEl.classList.add('video-time');
               }
 
@@ -6663,28 +6840,36 @@ export default class ChatBubbles {
             });
             this.setExtendedMediaMessagesPollInterval();
 
-            const {width, height} = attachmentDiv.style;
-            const {dotRenderer, readyResult} = DotRenderer.create({
-              width: parseInt(width),
-              height: parseInt(height),
-              middleware,
-              animationGroup: this.chat.animationGroup
-            });
-            loadPromises?.push(readyResult as Promise<any>);
-            attachmentDiv.append(dotRenderer.canvas);
+            if(extendedMedia.length === 1) {
+              const {width, height} = attachmentDiv.style;
+              const {canvas, readyResult} = DotRenderer.create({
+                width: parseInt(width),
+                height: parseInt(height),
+                middleware,
+                animationGroup: this.chat.animationGroup
+              });
+              loadPromises?.push(readyResult as Promise<any>);
+              attachmentDiv.append(canvas);
+            }
           }
 
           let titleDiv: HTMLElement;
-          if(!extendedMedia) {
+          if(isInvoice) {
             titleDiv = document.createElement('div');
             titleDiv.classList.add('bubble-primary-color');
-            setInnerHTML(titleDiv, wrapEmojiText(messageMedia.title));
+            setInnerHTML(titleDiv, wrapEmojiText((messageMedia as I).title));
           }
 
-          const richText = isAlreadyPaid ? undefined : wrapEmojiText(messageMedia.description);
-          messageDiv.prepend(...[titleDiv, !innerMedia && priceEl, richText].filter(Boolean));
+          let richText: HTMLElement | DocumentFragment;
+          if(isInvoice) {
+            richText = isAlreadyPaid ? undefined : wrapEmojiText((messageMedia as I).description);
+          }
 
-          if(!richText) canHaveTail = false;
+          messageDiv.prepend(...[titleDiv, richText].filter(Boolean));
+          attachmentDiv.append(...[(!innerMedia || !isInvoice) && priceEl].filter(Boolean));
+
+          if(!isInvoice) {}
+          else if(!richText) canHaveTail = false;
           else mediaRequiresMessageDiv = true;
           bubble.classList.add('is-invoice');
 
@@ -6790,7 +6975,9 @@ export default class ChatBubbles {
         default:
           attachmentDiv = undefined;
           mediaRequiresMessageDiv = true;
-          messageDiv.append(i18n(UNSUPPORTED_LANG_PACK_KEY), timeSpan);
+          noAttachmentDivNeeded = true;
+          messageDiv.replaceChildren(i18n(UNSUPPORTED_LANG_PACK_KEY));
+          bubble.timeAppenders[0].callback();
           this.log.warn('unrecognized media type:', messageMedia._, message);
           break;
       }
@@ -6826,7 +7013,7 @@ export default class ChatBubbles {
     if(isFloatingTime) {
       timeSpan.classList.add('is-floating');
       bubble.classList.add('has-floating-time');
-      bubble.timeAppenders = [];
+      // bubble.timeAppenders = [];
       appendBubbleTime(bubble, bubbleContainer, () => bubbleContainer.append(timeSpan));
     }
 
@@ -6875,7 +7062,7 @@ export default class ChatBubbles {
     }
 
     // const needName = ((peerId.isAnyChat() && (peerId !== message.fromId || our)) && message.fromId !== rootScope.myId) || message.viaBotId;
-    const needName = (message.fromId !== rootScope.myId && this.chat.isAnyGroup) ||
+    const needName = ((message.fromId !== rootScope.myId || !isOut) && this.chat.isLikeGroup) ||
       message.viaBotId ||
       storyFromPeerId;
     if(needName || fwdFrom || replyTo || topicNameButtonContainer) { // chat
@@ -7135,7 +7322,7 @@ export default class ChatBubbles {
           this.wrapTitleAndRank(firstElement, rank);
         };
 
-        const postAuthor = (message as Message.message).post_author/*  || fwdFrom?.post_author */;
+        const postAuthor = hasPostAuthor && (message as Message.message).post_author/*  || fwdFrom?.post_author */;
         if(postAuthor) {
           this.wrapTitleAndRank(firstElement, postAuthor);
         } else if(this.ranks) {
@@ -8411,22 +8598,31 @@ export default class ChatBubbles {
           message.message = '';
           message.from_id = {_: 'peerUser', user_id: NULL_PEER_ID};
           message.pFlags.sponsored = true;
+          message.pFlags.invert_media = true;
           message.sponsoredMessage = sponsoredMessage;
+
+          const sponsoredMedia = sponsoredMessage.media;
 
           const localWebPage: WebPage.webPage = {
             _: 'webPage',
             id: message.mid,
-            pFlags: {},
+            pFlags: {
+              has_large_media: !!sponsoredMedia || undefined
+            },
             url: '',
             display_url: '',
             hash: 0,
             description: sponsoredMessage.message,
-            entities: sponsoredMessage.entities
+            entities: sponsoredMessage.entities,
+            document: (sponsoredMedia as MessageMedia.messageMediaDocument)?.document,
+            photo: (sponsoredMedia as MessageMedia.messageMediaPhoto)?.photo
           };
 
           message.media = {
             _: 'messageMediaWebPage',
-            pFlags: {},
+            pFlags: {
+              force_large_media: !!sponsoredMedia || undefined
+            },
             webpage: localWebPage
           };
         }, SPONSORED_MESSAGE_ID_OFFSET);

@@ -35,7 +35,7 @@ import AppSharedMediaTab from '../sidebarRight/tabs/sharedMedia';
 import noop from '../../helpers/noop';
 import middlewarePromise from '../../helpers/middlewarePromise';
 import indexOfAndSplice from '../../helpers/array/indexOfAndSplice';
-import {Message, WallPaper, Chat as MTChat, Reaction, AvailableReaction, ChatFull, MessageEntity} from '../../layer';
+import {Message, WallPaper, Chat as MTChat, Reaction, AvailableReaction, ChatFull, MessageEntity, PaymentsPaymentForm} from '../../layer';
 import animationIntersector, {AnimationItemGroup} from '../animationIntersector';
 import {getColorsFromWallPaper} from '../../helpers/color';
 import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
@@ -47,7 +47,7 @@ import isForwardOfForward from '../../lib/appManagers/utils/messages/isForwardOf
 import getPeerId from '../../lib/appManagers/utils/peers/getPeerId';
 import {SendReactionOptions} from '../../lib/appManagers/appReactionsManager';
 import {MiddlewareHelper, getMiddleware} from '../../helpers/middleware';
-import {createEffect, createRoot, createSignal, on} from 'solid-js';
+import {Accessor, createEffect, createRoot, createSignal, on, untrack} from 'solid-js';
 import TopbarSearch from './topbarSearch';
 import createUnifiedSignal from '../../helpers/solid/createUnifiedSignal';
 import liteMode from '../../helpers/liteMode';
@@ -60,6 +60,11 @@ import {averageColorFromCanvas, averageColorFromImage} from '../../helpers/avera
 import highlightingColor from '../../helpers/highlightingColor';
 import callbackify from '../../helpers/callbackify';
 import useIsNightTheme from '../../hooks/useIsNightTheme';
+import useStars, {setReservedStars} from '../../stores/stars';
+import PopupElement from '../popups';
+import PopupStars from '../popups/stars';
+import {getPendingPaidReactionKey, PENDING_PAID_REACTIONS} from './reactions';
+import tsNow from '../../helpers/tsNow';
 
 export enum ChatType {
   Chat = 'chat',
@@ -129,8 +134,8 @@ export default class Chat extends EventListenerBase<{
   public isBot: boolean;
   public isChannel: boolean;
   public isBroadcast: boolean;
+  public isLikeGroup: boolean;
   public isAnyGroup: boolean;
-  public isRealGroup: boolean;
   public isMegagroup: boolean;
   public isForum: boolean;
   public isAllMessagesForum: boolean;
@@ -152,6 +157,8 @@ export default class Chat extends EventListenerBase<{
   public hadAnyBackground: boolean;
 
   public ignoreSearchCleaning: boolean;
+
+  public stars: Accessor<Long>;
 
   // public requestHistoryOptionsPart: RequestHistoryOptions;
 
@@ -683,11 +690,12 @@ export default class Chat extends EventListenerBase<{
           return;
         }
 
-        topbarSearch = TopbarSearch({
+        topbarSearch = untrack(() => TopbarSearch({
+          chat: this,
           chatType: this.type,
           peerId: this.peerId,
           threadId: this.threadId,
-          canFilterSender: this.isRealGroup,
+          canFilterSender: this.isAnyGroup,
           query,
           filterPeerId,
           reaction,
@@ -697,9 +705,9 @@ export default class Chat extends EventListenerBase<{
           onDatePick: (timestamp) => {
             this.bubbles.onDatePick(timestamp);
           },
-          onActive: (active, showingReactions) => {
+          onActive: (active, showingReactions, isSmallScreen) => {
             const className = 'is-search-active';
-            const isActive = !!(active && showingReactions);
+            const isActive = !!(active && (showingReactions || isSmallScreen));
             const wasActive = this.container.classList.contains(className);
             if(wasActive === isActive) {
               return;
@@ -707,13 +715,14 @@ export default class Chat extends EventListenerBase<{
 
             const scrollSaver = this.bubbles.createScrollSaver();
             scrollSaver.save();
-            this.container.classList.toggle(className, isActive);
+            this.container.classList.toggle(className, !isSmallScreen && isActive);
+            this.topbar.container.classList.toggle('hide-pinned', isSmallScreen);
             scrollSaver.restore();
           },
           onSearchTypeChange: () => {
             this.ignoreSearchCleaning = true;
           }
-        }) as HTMLElement;
+        })) as HTMLElement;
         this.topbar.container.append(topbarSearch);
         animateElements(topbarSearch, true);
         return topbarSearch;
@@ -726,6 +735,11 @@ export default class Chat extends EventListenerBase<{
         setReaction(s?.reaction);
         setNeedSearch(!!s);
       });
+    });
+
+    createRoot((dispose) => {
+      this.middlewareHelper.get().onDestroy(dispose);
+      this.stars = useStars();
     });
   }
 
@@ -807,7 +821,7 @@ export default class Chat extends EventListenerBase<{
     const [
       noForwards,
       isRestricted,
-      isAnyGroup,
+      isLikeGroup,
       isRealGroup,
       _,
       isMegagroup,
@@ -820,7 +834,7 @@ export default class Chat extends EventListenerBase<{
     ] = await m(Promise.all([
       this.managers.appPeersManager.noForwards(peerId),
       this.managers.appPeersManager.isPeerRestricted(peerId),
-      this._isAnyGroup(peerId),
+      this._isLikeGroup(peerId),
       this.managers.appPeersManager.isAnyGroup(peerId),
       this.setAutoDownloadMedia(),
       this.managers.appPeersManager.isMegagroup(peerId),
@@ -839,8 +853,8 @@ export default class Chat extends EventListenerBase<{
 
     this.noForwards = noForwards;
     this.isRestricted = isRestricted;
-    this.isAnyGroup = isAnyGroup;
-    this.isRealGroup = isRealGroup;
+    this.isLikeGroup = isLikeGroup;
+    this.isAnyGroup = isRealGroup;
     this.isMegagroup = isMegagroup;
     this.isBroadcast = isBroadcast;
     this.isChannel = isChannel;
@@ -1116,35 +1130,21 @@ export default class Chat extends EventListenerBase<{
   }
 
   // * used to define need of avatars
-  public _isAnyGroup(peerId: PeerId) {
+  public _isLikeGroup(peerId: PeerId) {
     return peerId === rootScope.myId ||
       peerId === REPLIES_PEER_ID ||
       (this.type === ChatType.Search && this.hashtagType !== 'this') ||
-      this.managers.appPeersManager.isAnyGroup(peerId);
+      this.managers.appPeersManager.isLikeGroup(peerId);
   }
 
   public resetSearch() {
     this.searchSignal?.(undefined);
   }
 
-  public initSearch(options: {query?: string, filterPeerId?: PeerId, reaction?: Reaction} = {}) {
+  public initSearch(options: {query?: string, filterPeerId?: PeerId, reaction?: Reaction} = {}): void {
     if(!this.peerId) return;
-    const {query} = options;
-
-    if(mediaSizes.isMobile) {
-      if(!this.search) {
-        this.search = new ChatSearch(this.topbar, this, query);
-      } else {
-        this.search.setQuery(query);
-      }
-    } else {
-      options.query ||= '';
-      this.searchSignal(options);
-      // let tab = appSidebarRight.getTab(AppPrivateSearchTab);
-      // tab ||= appSidebarRight.createTab(AppPrivateSearchTab);
-
-      // tab.open(this.peerId, this.threadId, this.bubbles.onDatePick, query);
-    }
+    options.query ||= '';
+    this.searchSignal(options);
   }
 
   public canSend(action?: ChatRights) {
@@ -1199,7 +1199,7 @@ export default class Chat extends EventListenerBase<{
       return !!message.pFlags.out;
     }
 
-    if(message.fromId === rootScope.myId) {
+    if(message.fromId === rootScope.myId && !message.pFlags.post) {
       return true;
     }
 
@@ -1219,7 +1219,7 @@ export default class Chat extends EventListenerBase<{
   }
 
   public isAvatarNeeded(message: Message.message | Message.messageService) {
-    return this.isAnyGroup && !this.isOutMessage(message);
+    return this.isLikeGroup && !this.isOutMessage(message);
   }
 
   public isPinnedMessagesNeeded() {
@@ -1243,6 +1243,10 @@ export default class Chat extends EventListenerBase<{
   }
 
   public getPostAuthor(message: Message.message) {
+    if(this.isLikeGroup) {
+      return;
+    }
+
     const fwdFrom = message.fwd_from;
     const isPost = !!(message.pFlags.post || (fwdFrom?.post_author && !this.isOutMessage(message)));
     if(!isPost) {
@@ -1277,10 +1281,72 @@ export default class Chat extends EventListenerBase<{
     return this.appImManager.openWebApp(options);
   }
 
-  public sendReaction(options: SendReactionOptions) {
-    return this.managers.appReactionsManager.sendReaction({
+  public async sendReaction(options: SendReactionOptions) {
+    const isPaidReaction = options.reaction._ === 'reactionPaid';
+    const count = options.count ?? 1;
+    if(isPaidReaction) {
+      if(!this.stars()) {
+        PopupElement.createPopup(PopupStars, {
+          itemPrice: 1,
+          onTopup: () => {
+            this.sendReaction(options);
+          },
+          purpose: 'reaction',
+          peerId: this.peerId
+        });
+
+        return;
+      }
+
+      const DELAY = 5;
+
+      const key = getPendingPaidReactionKey(options.message as Message.message);
+      let pending = PENDING_PAID_REACTIONS.get(key);
+      if(!pending) {
+        PENDING_PAID_REACTIONS.set(key, pending = {
+          count: 0,
+          sendTimestamp: 0,
+          sendTimeout: 0,
+          cancel: () => {
+            clearTimeout(pending.sendTimeout);
+            PENDING_PAID_REACTIONS.delete(key);
+            setReservedStars((reservedStars) => reservedStars - pending.count);
+            rootScope.dispatchEventSingle('messages_reactions', [{
+              message: this.getMessageByPeer(options.message.peerId, options.message.mid) as Message.message,
+              changedResults: [],
+              removedResults: []
+            }]);
+          }
+        });
+      } else {
+        clearTimeout(pending.sendTimeout);
+      }
+
+      pending.count += count;
+      pending.sendTimestamp = tsNow(true) + DELAY;
+      pending.sendTimeout = window.setTimeout(() => {
+        pending.cancel();
+        alert('yeah');
+      }, DELAY * 1e3);
+
+      setReservedStars((reservedStars) => reservedStars + count);
+    }
+
+    const messageReactions = await this.managers.appReactionsManager.sendReaction({
       sendAsPeerId: this.getMessageSendingParams().sendAsPeerId,
-      ...options
+      ...options,
+      count: isPaidReaction ? 0 : count,
+      onlyReturn: isPaidReaction
     });
+
+    if(isPaidReaction) {
+      const {message} = options;
+      message.reactions = messageReactions;
+      rootScope.dispatchEventSingle('messages_reactions', [{
+        message: message as Message.message,
+        changedResults: [messageReactions.results[0]],
+        removedResults: []
+      }]);
+    }
   }
 }

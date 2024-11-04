@@ -56,7 +56,6 @@ import getVisibleRect from '../../helpers/dom/getVisibleRect';
 import {simulateClickEvent} from '../../helpers/dom/clickEvent';
 import PopupCall from '../../components/call';
 import copy from '../../helpers/object/copy';
-import getObjectKeysAndSort from '../../helpers/object/getObjectKeysAndSort';
 import numberThousandSplitter from '../../helpers/number/numberThousandSplitter';
 import ChatBackgroundPatternRenderer from '../../components/chat/patternRenderer';
 import {IS_CHROMIUM, IS_FIREFOX} from '../../environment/userAgent';
@@ -116,7 +115,6 @@ import safePlay from '../../helpers/dom/safePlay';
 import {RequestWebViewOptions} from './appAttachMenuBotsManager';
 import PopupWebApp from '../../components/popups/webApp';
 import {getPeerColorIndexByPeer, getPeerColorsByPeer, setPeerColors} from './utils/peers/getPeerColorById';
-import deepEqual from '../../helpers/object/deepEqual';
 import {savedReactionTags} from '../../components/chat/reactions';
 import {setAppState} from '../../stores/appState';
 import rtmpCallsController, {RtmpCallInstance} from '../calls/rtmpCallsController';
@@ -126,11 +124,13 @@ import {DEFAULT_BACKGROUND_SLUG} from '../../config/app';
 import blur from '../../helpers/blur';
 import {wrapSlowModeLeftDuration} from '../../components/wrappers/wrapDuration';
 import {splitFullMid} from '../../components/chat/bubbles';
-import PopupStars from '../../components/popups/stars';
 import getSelectedNodes from '../../helpers/dom/getSelectedNodes';
 import {setQuizHint} from '../../components/poll';
 import anchorCallback from '../../helpers/dom/anchorCallback';
 import PopupPremium from '../../components/popups/premium';
+import safeWindowOpen from '../../helpers/dom/safeWindowOpen';
+import {openWebAppInAppBrowser} from '../../components/browser';
+import PopupBoostsViaGifts from '../../components/popups/boostsViaGifts';
 
 export type ChatSavedPosition = {
   mids: number[],
@@ -656,6 +656,10 @@ export class AppImManager extends EventListenerBase<{
       const canvases = Array.from(document.querySelectorAll('canvas')) as HTMLCanvasElement[];
       canvases.forEach((canvas) => {
         const context = canvas.getContext('2d');
+        if(!context) {
+          return;
+        }
+
         const oldFillStyle = context.fillStyle;
         context.fillStyle = 'transparent';
         context.fillRect(0, 0, 1, 1);
@@ -677,6 +681,8 @@ export class AppImManager extends EventListenerBase<{
     this.handlePeerColors();
     this.checkForShare();
     this.init();
+
+    // PopupElement.createPopup(PopupBoostsViaGifts, -5000866300);
   }
 
   private checkForShare() {
@@ -827,8 +833,8 @@ export class AppImManager extends EventListenerBase<{
     };
 
     if(
-      !options.attachMenuBot &&
-      (options.fromAttachMenu || options.fromSideMenu)
+      !options.attachMenuBot/*  &&
+      (options.fromAttachMenu || options.fromSideMenu) */
     ) {
       try {
         options.attachMenuBot = await this.managers.appAttachMenuBotsManager.getAttachMenuBot(options.botId);
@@ -859,12 +865,25 @@ export class AppImManager extends EventListenerBase<{
     }
 
     try {
+      const cacheKeyArr = [options.botId, options.startParam];
+      if(options.fromBotMenu || options.fromSideMenu || options.main) {
+        cacheKeyArr.push('main');
+      }
+
+      const cacheKey = cacheKeyArr.join('-');
+
       const webViewResultUrl = await this.managers.appAttachMenuBotsManager.requestWebView(options as RequestWebViewOptions);
-      PopupElement.createPopup(PopupWebApp, {
+      const webAppOptions: Parameters<typeof openWebAppInAppBrowser>[0] = {
         webViewResultUrl,
         webViewOptions: options as RequestWebViewOptions,
-        attachMenuBot: options.attachMenuBot
-      });
+        attachMenuBot: options.attachMenuBot,
+        cacheKey
+      };
+      if(IS_TOUCH_SUPPORTED) {
+        PopupElement.createPopup(PopupWebApp, webAppOptions);
+      } else {
+        openWebAppInAppBrowser(webAppOptions);
+      }
     } catch(err) {
       if((err as ApiError).type === 'PEER_ID_INVALID' && options.attachMenuBot) {
         toastNew({
@@ -1224,9 +1243,13 @@ export class AppImManager extends EventListenerBase<{
     });
   }
 
-  public openUrl(url: string) {
+  public openUrl(url: string, newWindowIfNoClick?: boolean) {
     const {url: wrappedUrl, onclick} = wrapUrl(url);
     if(!onclick) {
+      if(newWindowIfNoClick) {
+        safeWindowOpen(wrappedUrl);
+      }
+
       return;
     }
 
@@ -1304,6 +1327,18 @@ export class AppImManager extends EventListenerBase<{
 
     // appNavigationController.replaceState();
     // location.hash = '';
+  };
+
+  public onSponsoredBoxClick = (message: Message.message) => {
+    const sponsoredMessage = message.sponsoredMessage;
+    const wrapped = wrapUrl(sponsoredMessage.url);
+    this.clickIfSponsoredMessage(message as Message.message);
+
+    if(wrapped.onclick) {
+      this.chat.appImManager.openUrl(sponsoredMessage.url);
+    } else {
+      safeWindowOpen(wrapped.url);
+    }
   };
 
   public async open(options: Omit<Parameters<AppImManager['op']>[0], 'peer'> & {peerId: PeerId}) {

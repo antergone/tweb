@@ -116,7 +116,7 @@ export default class AppMediaViewerBase<
 
   protected isFirstOpen = true;
 
-  protected pageEl = document.getElementById('page-chats') as HTMLDivElement;
+  // protected pageEl = document.getElementById('page-chats') as HTMLDivElement;
 
   protected setMoverPromise: Promise<void>;
   protected setMoverAnimationPromise: Promise<void>;
@@ -180,7 +180,8 @@ export default class AppMediaViewerBase<
 
   constructor(
     protected listLoader: ListLoader<TargetType, any>,
-    topButtons: Array<keyof AppMediaViewerBase<ContentAdditionType, ButtonsAdditionType, TargetType>['buttons']>
+    topButtons: Array<keyof AppMediaViewerBase<ContentAdditionType, ButtonsAdditionType, TargetType>['buttons']>,
+    protected extraHeightPadding = 0
   ) {
     super(false);
 
@@ -1544,7 +1545,10 @@ export default class AppMediaViewerBase<
 
   protected get mediaBoxSize(): MediaSize {
     const {width, height} = windowSize;
-    return new MediaSize(width, height - 120 - (mediaSizes.isMobile || this.live ? 0 : 120));
+    return new MediaSize(
+      width,
+      height - 120 - (mediaSizes.isMobile || this.live ? 0 : 120) - this.extraHeightPadding
+    );
   }
 
   protected async _openMedia({
@@ -1562,7 +1566,8 @@ export default class AppMediaViewerBase<
     setupPlayer,
     onCanPlay,
     onMoverSet,
-    onBuffering
+    onBuffering,
+    noAuthor
   }: {
     media: MyDocument | MyPhoto | InputGroupCall,
     mediaThumbnail?: string,
@@ -1578,12 +1583,13 @@ export default class AppMediaViewerBase<
     setupPlayer?: (video: VideoPlayer, readyPromise: Promise<any>) => void,
     onCanPlay?: () => void,
     onMoverSet?: () => void,
-    onBuffering?: () => void
+    onBuffering?: () => void,
+    noAuthor?: boolean
     /* , needLoadMore = true */
   }) {
     if(this.setMoverPromise) return this.setMoverPromise;
 
-    const setAuthorPromise = this.setAuthorInfo(fromId, timestamp);
+    const setAuthorPromise = noAuthor ? Promise.resolve() : this.setAuthorInfo(fromId, timestamp);
 
     const isLiveStream = media._ === 'inputGroupCall';
     const isDocument = media._ === 'document';
@@ -1654,7 +1660,7 @@ export default class AppMediaViewerBase<
       await setAuthorPromise;
 
       if(!this.wholeDiv.parentElement) {
-        this.pageEl.insertBefore(this.wholeDiv, document.getElementById('main-columns'));
+        document.body.append(this.wholeDiv);
         void this.wholeDiv.offsetLeft; // reflow
       }
 
