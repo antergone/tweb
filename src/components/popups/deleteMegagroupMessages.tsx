@@ -66,7 +66,7 @@ export default class PopupDeleteMegagroupMessages extends PopupElement {
         acc.set(field.peerId, set = new Set());
       }
 
-      if(field.checked) {
+      if(field.checkboxField.checked) {
         set.add(field.action);
       }
       return acc;
@@ -85,7 +85,7 @@ export default class PopupDeleteMegagroupMessages extends PopupElement {
       }
 
       if(actions.has('report')) {
-        promises.push(managers.appMessagesManager.reportMessages(peerId, mids, 'inputReportReasonSpam'));
+        promises.push(managers.appMessagesManager.reportSpamMessages(peerId, fromId, mids));
       }
 
       if(actions.has('delete')) {

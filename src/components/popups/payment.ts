@@ -19,6 +19,7 @@ import replaceContent from '../../helpers/dom/replaceContent';
 import setInnerHTML from '../../helpers/dom/setInnerHTML';
 import toggleDisability from '../../helpers/dom/toggleDisability';
 import {formatPhoneNumber} from '../../helpers/formatPhoneNumber';
+import makeError from '../../helpers/makeError';
 import {makeMediaSize} from '../../helpers/mediaSize';
 import safeAssign from '../../helpers/object/safeAssign';
 import paymentsWrapCurrencyAmount from '../../helpers/paymentsWrapCurrencyAmount';
@@ -250,6 +251,9 @@ export default class PopupPayment extends PopupElement<{
     };
 
     const {paymentForm, message} = this;
+    if(paymentForm._ === 'payments.paymentFormStarGift') {
+      throw new Error('not implemented');
+    }
 
     if(message) {
       this.listenerSetter.add(rootScope)('payment_sent', ({peerId, mid}) => {
@@ -269,7 +273,7 @@ export default class PopupPayment extends PopupElement<{
     const isTest = mediaInvoice ? mediaInvoice.pFlags.test : paymentForm.invoice.pFlags.test;
     const isStars = paymentForm._ === 'payments.paymentFormStars';
 
-    const photo = mediaInvoice ? mediaInvoice.photo : paymentForm.photo;
+    const photo = mediaInvoice ? mediaInvoice.photo : (paymentForm as PaymentsPaymentForm.paymentsPaymentForm).photo;
     const title = mediaInvoice ? mediaInvoice.title : paymentForm.title;
     const description = mediaInvoice ? mediaInvoice.description : paymentForm.description;
 
@@ -903,7 +907,7 @@ export default class PopupPayment extends PopupElement<{
                 if(confirmed) {
                   resolve();
                 } else {
-                  const err = new Error('payment not finished');
+                  const err = makeError(undefined, 'payment not finished');
                   (err as ApiError).handled = true;
                   reject(err);
                   this.result = 'failed';

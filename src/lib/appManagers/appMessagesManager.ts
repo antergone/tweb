@@ -78,6 +78,8 @@ import getMainGroupedMessage from './utils/messages/getMainGroupedMessage';
 import getUnreadReactions from './utils/messages/getUnreadReactions';
 import isMentionUnread from './utils/messages/isMentionUnread';
 import canMessageHaveFactCheck from './utils/messages/canMessageHaveFactCheck';
+import commonStateStorage from '../commonStateStorage';
+import {isDocumentHlsQualityFile} from '../hls/common';
 
 // console.trace('include');
 // TODO: если удалить диалог находясь в папке, то он не удалится из папки и будет виден в настройках
@@ -367,6 +369,8 @@ export class AppMessagesManager extends AppManager {
 
   private factCheckBatcher: Batcher<PeerId, number, FactCheck>;
 
+  public altDocsByMainMediaDocument: Map<string, Document.document[]> = new Map();
+
   protected after() {
     this.clear(true);
 
@@ -533,8 +537,7 @@ export class AppMessagesManager extends AppManager {
         // @ts-ignore
         const result = details.callback(details.batch);
         if(result && (!(result instanceof Array) || result.length)) {
-          // @ts-ignore
-          rootScope.dispatchEvent(event as keyof BatchUpdates, result);
+          this.rootScope.dispatchEvent(event as keyof BatchUpdates, result as any);
         }
       }
     }, 33, false, true);
@@ -1339,7 +1342,6 @@ export class AppMessagesManager extends AppManager {
           this.apiUpdatesManager.processUpdateMessage(updates);
         }, (error: ApiError) => {
           if(attachType === 'photo' &&
-            error.code === 400 &&
             (error.type === 'PHOTO_INVALID_DIMENSIONS' ||
             error.type === 'PHOTO_SAVE_FILE_INVALID')) {
             error.handled = true;
@@ -1536,7 +1538,7 @@ export class AppMessagesManager extends AppManager {
         if(!isUploadCanceled) {
           log.error('upload item error:', err, message);
         }
-        toggleError(message, err);
+        toggleError(message, err as ApiError);
         throw err;
       }
 
@@ -1548,7 +1550,7 @@ export class AppMessagesManager extends AppManager {
         });
       } catch(err) {
         log.error('uploadMedia error:', err, message);
-        toggleError(message, err);
+        toggleError(message, err as ApiError);
         throw err;
       }
 
@@ -3121,7 +3123,8 @@ export class AppMessagesManager extends AppManager {
 
     MTProtoMessagePort.getInstance<false>().invokeVoid('mirror', {
       name: 'messages',
-      value: mirror
+      value: mirror,
+      accountNumber: this.getAccountNumber()
     }, port);
   }
 
@@ -3161,7 +3164,8 @@ export class AppMessagesManager extends AppManager {
       MTProtoMessagePort.getInstance<false>().invokeVoid('mirror', {
         name: 'messages',
         key: joinDeepPath(storage.key, mid),
-        value: message
+        value: message,
+        accountNumber: this.getAccountNumber()
       });
     }
 
@@ -3181,7 +3185,8 @@ export class AppMessagesManager extends AppManager {
     if(storage.type !== 'grouped') {
       MTProtoMessagePort.getInstance<false>().invokeVoid('mirror', {
         name: 'messages',
-        key: joinDeepPath(storage.key, mid)
+        key: joinDeepPath(storage.key, mid),
+        accountNumber: this.getAccountNumber()
       });
     }
 
@@ -4164,8 +4169,15 @@ export class AppMessagesManager extends AppManager {
           unsupported = true;
         } else {
           const originalDoc = media.document;
-          media.document = this.appDocsManager.saveDoc(originalDoc, mediaContext); // 11.04.2020 warning
-          media.alt_document &&= this.appDocsManager.saveDoc(media.alt_document, mediaContext); // 11.04.2020 warning
+
+          const supportsHlsStreaming = (media.alt_documents || []).some((doc) => isDocumentHlsQualityFile(doc));
+
+          media.document = this.appDocsManager.saveDoc(originalDoc, mediaContext, supportsHlsStreaming); // 11.04.2020 warning
+          // ??? 11.04.2020 warning
+          media.alt_documents &&= media.alt_documents?.map((altDoc) =>
+            this.appDocsManager.saveDoc(altDoc, mediaContext)).filter(Boolean) || []; // idk why but sometimes there is [undefined] in the alt_documents
+
+          if(media.alt_documents) this.altDocsByMainMediaDocument.set(media.document.id.toString(), media.alt_documents as Document.document[]);
 
           if(!media.document && originalDoc._ !== 'documentEmpty') {
             unsupported = true;
@@ -4273,14 +4285,20 @@ export class AppMessagesManager extends AppManager {
     }
   }
 
-  public reportMessages(peerId: PeerId, mids: number[], reason: ReportReason['_'], message?: string) {
+  public reportMessages(peerId: PeerId, mids: number[], option: Uint8Array, message?: string) {
     return this.apiManager.invokeApiSingle('messages.report', {
       peer: this.appPeersManager.getInputPeerById(peerId),
       id: mids.map((mid) => getServerMessageId(mid)),
-      reason: {
-        _: reason
-      },
+      option,
       message
+    });
+  }
+
+  public reportSpamMessages(peerId: PeerId, participantPeerId: PeerId, mids: number[]) {
+    return this.apiManager.invokeApiSingle('channels.reportSpam', {
+      channel: this.appChatsManager.getChannelInput(peerId.toChatId()),
+      participant: this.appPeersManager.getInputPeerById(participantPeerId),
+      id: mids.map((mid) => getServerMessageId(mid))
     });
   }
 
@@ -6231,7 +6249,7 @@ export class AppMessagesManager extends AppManager {
         }
       }
 
-      this.rootScope.dispatchEvent('notification_cancel', 'msg' + mid);
+      this.rootScope.dispatchEvent('notification_cancel', `msg_${this.getAccountNumber()}_${peerId}_${mid}`);
     }
 
     if(isOut) historyStorage.readOutboxMaxId = maxId;
@@ -7107,7 +7125,7 @@ export class AppMessagesManager extends AppManager {
     });
   }
 
-  private notifyAboutMessage(message: MyMessage, options: Partial<{
+  private async notifyAboutMessage(message: MyMessage, options: Partial<{
     fwdCount: number,
     peerReaction: MessagePeerReaction,
     peerTypeNotifySettings: PeerNotifySettings
@@ -7118,20 +7136,32 @@ export class AppMessagesManager extends AppManager {
       return;
     }
 
-    const tabs = appTabsManager.getTabs();
+    const settings = await commonStateStorage.get('settings', false);
+
+    let tabs = appTabsManager.getTabs();
+    if(!settings.notifyAllAccounts)
+      tabs = tabs.filter((tab) => tab.state.accountNumber === this.getAccountNumber());
+
+    tabs.sort((a, b) => a.state.idleStartTime - b.state.idleStartTime);
+
     let tab = tabs.find((tab) => {
-      const {chatPeerIds} = tab.state;
-      return chatPeerIds[chatPeerIds.length - 1] === peerId;
+      const {chatPeerIds, accountNumber} = tab.state;
+      return accountNumber === this.getAccountNumber() && chatPeerIds[chatPeerIds.length - 1] === peerId;
     });
 
+    if(!tab) {
+      tab = tabs.find((tab) => tab.state.accountNumber === this.getAccountNumber());
+    }
+
     if(!tab && tabs.length) {
-      tabs.sort((a, b) => a.state.idleStartTime - b.state.idleStartTime);
       tab = !tabs[0].state.idleStartTime ? tabs[0] : tabs[tabs.length - 1];
     }
 
     const port = MTProtoMessagePort.getInstance<false>();
     port.invokeVoid('notificationBuild', {
       message,
+      accountNumber: this.getAccountNumber(),
+      isOtherTabActive: !!tab.state.idleStartTime,
       ...options
     }, tab?.source);
   }
@@ -8259,7 +8289,7 @@ export class AppMessagesManager extends AppManager {
 
       if(!message.pFlags.out && !message.pFlags.is_outgoing && message.pFlags.unread) {
         ++history.unread;
-        this.rootScope.dispatchEvent('notification_cancel', 'msg' + mid);
+        this.rootScope.dispatchEvent('notification_cancel', `msg_${this.getAccountNumber()}_${peerId}_${mid}`);
 
         if(isMentionUnread(message)) {
           ++history.unreadMentions;
@@ -8586,6 +8616,10 @@ export class AppMessagesManager extends AppManager {
     }
 
     return this.factCheckBatcher.addToBatch(peerId, mid);
+  }
+
+  public getAltDocsByDocument(doc: Document.document) {
+    return this.altDocsByMainMediaDocument.get(doc.id.toString());
   }
 }
 

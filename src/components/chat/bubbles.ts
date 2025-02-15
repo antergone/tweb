@@ -20,7 +20,7 @@ import Scrollable, {SliceSides} from '../scrollable';
 import StickyIntersector from '../stickyIntersector';
 import animationIntersector from '../animationIntersector';
 import mediaSizes from '../../helpers/mediaSizes';
-import {IS_ANDROID, IS_APPLE, IS_MOBILE, IS_SAFARI} from '../../environment/userAgent';
+import {IS_ANDROID, IS_APPLE, IS_FIREFOX, IS_MOBILE, IS_SAFARI} from '../../environment/userAgent';
 import I18n, {FormatterArguments, i18n, langPack, LangPackKey, UNSUPPORTED_LANG_PACK_KEY, _i18n} from '../../lib/langPack';
 import ripple from '../ripple';
 import {fireMessageEffectByBubble, MessageRender} from './messageRender';
@@ -32,7 +32,7 @@ import {ChannelParticipant, Chat as MTChat, ChatInvite, ChatParticipant, Documen
 import {BOT_START_PARAM, NULL_PEER_ID, REPLIES_PEER_ID, SEND_WHEN_ONLINE_TIMESTAMP, STARS_CURRENCY} from '../../lib/mtproto/mtproto_config';
 import {FocusDirection, ScrollStartCallbackDimensions} from '../../helpers/fastSmoothScroll';
 import useHeavyAnimationCheck, {getHeavyAnimationPromise, dispatchHeavyAnimationEvent, interruptHeavyAnimation} from '../../hooks/useHeavyAnimationCheck';
-import {fastRaf, fastRafPromise} from '../../helpers/schedulers';
+import {doubleRaf, fastRaf, fastRafPromise} from '../../helpers/schedulers';
 import deferredPromise from '../../helpers/cancellablePromise';
 import RepliesElement from './replies';
 import DEBUG from '../../config/debug';
@@ -111,7 +111,7 @@ import wrapDocument from '../wrappers/document';
 import wrapGroupedDocuments from '../wrappers/groupedDocuments';
 import wrapPhoto from '../wrappers/photo';
 import wrapPoll from '../wrappers/poll';
-import wrapVideo from '../wrappers/video';
+import wrapVideo, {USE_VIDEO_OBSERVER} from '../wrappers/video';
 import isRTL, {endsWithRTL} from '../../helpers/string/isRTL';
 import NBSP from '../../helpers/string/nbsp';
 import DotRenderer from '../dotRenderer';
@@ -184,6 +184,10 @@ import safeWindowOpen from '../../helpers/dom/safeWindowOpen';
 import findAndSplice from '../../helpers/array/findAndSplice';
 import generatePhotoForExtendedMediaPreview from '../../lib/appManagers/utils/photos/generatePhotoForExtendedMediaPreview';
 import icon from '../icon';
+import {MediaSearchContext} from '../appMediaPlaybackController';
+import {wrapRoundVideoBubble} from './roundVideoBubble';
+import {createMessageSpoilerOverlay} from '../messageSpoilerOverlay';
+import SolidJSHotReloadGuardProvider from '../../lib/solidjs/hotReloadGuardProvider';
 
 export const USER_REACTIONS_INLINE = false;
 export const TEST_BUBBLES_DELETION = false;
@@ -315,6 +319,14 @@ const EMPTY_FULL_MID = makeFullMid(NULL_PEER_ID, 0);
 function appendBubbleTime(bubble: HTMLElement, element: HTMLElement, callback: () => void) {
   (bubble.timeAppenders ??= []).unshift({element, callback});
   callback();
+}
+
+type AddMessageSpoilerOverlayParams = {
+  mid: number;
+  loadPromises?: Promise<void>[];
+  messageDiv: HTMLDivElement;
+  middleware: Middleware;
+  canTranslate?: boolean;
 }
 
 export default class ChatBubbles {
@@ -1914,7 +1926,7 @@ export default class ChatBubbles {
 
   private onBubblesMouseMove = async(e: MouseEvent) => {
     const mediaVideoContainer = findUpClassName(e.target, 'media-video-mini');
-    (mediaVideoContainer as any)?.onMouseMove?.(e);
+    mediaVideoContainer?.onMiniVideoMouseMove?.(e);
 
     const content = findUpClassName(e.target, 'bubble-content');
     if(!(
@@ -3088,40 +3100,6 @@ export default class ChatBubbles {
       return;
     }
 
-    const intersecting = this.observer?.getIntersecting();
-    if(intersecting) {
-      const videos = Array.from(intersecting).filter((el) => el instanceof HTMLVideoElement && (el as any).mini);
-      const centerY = windowSize.height / 2;
-      const distances = videos.map((video) => {
-        // const bubble = findUpClassName(video, 'bubble');
-        const rect = video.getBoundingClientRect();
-        const distanceToVerticalCenter = Math.abs(rect.top + rect.height / 2 - centerY);
-        return {video/* , bubble */, distance: distanceToVerticalCenter};
-      }).sort((a, b) => a.distance - b.distance);
-      let closest = distances[0];
-      if(closest && closest.distance > 150) {
-        closest = undefined;
-      }
-
-      const video = closest?.video as HTMLVideoElement;
-      if(this.lastPlayingVideo !== video) {
-        const animationItem = animationIntersector.getAnimations(this.lastPlayingVideo)[0];
-        if(animationItem) {
-          animationIntersector.toggleItemLock(animationItem, true);
-          this.lastPlayingVideo.pause();
-        }
-
-        this.lastPlayingVideo = video;
-
-        if(video) {
-          // console.log('video', video);
-          const animationItem = animationIntersector.getAnimations(video)[0];
-          animationIntersector.toggleItemLock(animationItem, false);
-          safePlay(video);
-        }
-      }
-    }
-
     const distanceToEnd = forceDown ? 0 : scrollDimensions?.distanceToEnd ?? this.scrollable.getDistanceToEnd();
     if(/* !IS_TOUCH_SUPPORTED &&  */(this.scrollable.lastScrollDirection !== 0 && distanceToEnd > 0) || scrollDimensions || forceDown) {
     // if(/* !IS_TOUCH_SUPPORTED &&  */(this.scrollable.lastScrollDirection !== 0 || scrollDimensions) && distanceToEnd > 0) {
@@ -3144,6 +3122,77 @@ export default class ChatBubbles {
       this.container.classList.remove('scrolled-down');
       this.scrolledDown = false;
     }
+
+    this.checkIntersectingVideos();
+  };
+
+  private checkIntersectingVideos() {
+    if(!USE_VIDEO_OBSERVER) {
+      return;
+    }
+
+    const intersecting = this.observer?.getIntersecting();
+    if(!intersecting) {
+      return;
+    }
+
+    const videos = Array.from(intersecting).filter((el) => el instanceof HTMLVideoElement && el.mini);
+    const centerY = videos.length ? windowSize.height / 2 : 0;
+    const distances = videos.map((video) => {
+      const bubble = findUpClassName(video, 'bubble');
+      const rect = video.getBoundingClientRect();
+      const rectBubble = bubble.getBoundingClientRect();
+      const distanceToVerticalCenter = Math.abs(rect.top + rect.height / 2 - centerY);
+      let distanceBubbleToVerticalCenter = rectBubble.top > centerY ? rectBubble.top - centerY : centerY - rectBubble.bottom;
+      if(rectBubble.top < centerY && rectBubble.bottom > centerY) { // * if bubble is in the center
+        distanceBubbleToVerticalCenter = 0;
+      }
+      return {
+        video,
+        rect,
+        /* , bubble */
+        distance: distanceToVerticalCenter,
+        distanceBubble: distanceBubbleToVerticalCenter
+      };
+    }).sort((a, b) => a.distance - b.distance);
+    let closest = distances[0];
+    if(this.scrolledDown && closest) { // * if it's the last message
+      distances.sort((a, b) => b.rect.bottom - a.rect.bottom);
+      closest = distances[0];
+    } else if(closest && closest.distance > 150 && closest.distanceBubble > 150) {
+      closest = undefined;
+    }
+
+    const video = closest?.video as HTMLVideoElement;
+    if(this.lastPlayingVideo !== video) {
+      const animationItem = animationIntersector.getAnimations(this.lastPlayingVideo)[0];
+      if(animationItem) {
+        animationIntersector.toggleItemLock(animationItem, true);
+        this.lastPlayingVideo.pause();
+      }
+
+      this.lastPlayingVideo = video;
+
+      if(video) {
+        // console.log('video', video);
+        const animationItem = animationIntersector.getAnimations(video)[0];
+        animationIntersector.toggleItemLock(animationItem, false);
+        safePlay(video);
+      }
+    }
+  }
+
+  private onVideoLoad = async() => {
+    if(!USE_VIDEO_OBSERVER) {
+      return;
+    }
+
+    await getHeavyAnimationPromise();
+    await doubleRaf();
+    if(this.lastPlayingVideo) {
+      return;
+    }
+    this.checkIntersectingVideos();
   };
 
   public setScroll() {
@@ -4994,7 +5043,7 @@ export default class ChatBubbles {
 
       const promise = originalPromise.then((r) => ((r && realMiddleware() ? {...r, updatePosition, canAnimateLadder} : undefined) as typeof result));
 
-      this.renderMessagesQueue(promise.catch(() => undefined));
+      this.renderMessagesQueue(promise.catch(() => undefined as any));
 
       result = await promise;
       if(!realMiddleware()) {
@@ -6003,7 +6052,9 @@ export default class ChatBubbles {
 
     const canPossiblyHavePlainMediaTail = isMessageEmpty || invertMedia;
 
-    let storyFromPeerId: PeerId, noAttachmentDivNeeded = false, processedWebPage = false;
+    let storyFromPeerId: PeerId, noAttachmentDivNeeded = false, processedWebPage = false,
+      isRound = false, searchContext: MediaSearchContext;
+    const globalMediaDeferred = deferredPromise<HTMLMediaElement>();
     // media
     if(messageMedia) {
       attachmentDiv = document.createElement('div');
@@ -6194,6 +6245,7 @@ export default class ChatBubbles {
                 autoDownload: this.chat.autoDownload,
                 noInfo: message.mid < 0 && !sponsoredMedia,
                 observer: this.observer,
+                onLoad: this.onVideoLoad,
                 setShowControlsOn: bubble
               });
             } else {
@@ -6441,13 +6493,13 @@ export default class ChatBubbles {
           } else if(doc.type === 'video' || doc.type === 'gif' || doc.type === 'round'/*  && doc.size <= 20e6 */) {
             // this.log('never get free 2', doc);
 
-            const isRound = doc.type === 'round';
+            isRound = doc.type === 'round';
             if(isRound) {
               isStandaloneMedia = true;
             }
 
             if(isRound/*  || isMessageEmpty */) {
-              canHaveTail = false;
+              // canHaveTail = false;
             } else {
               canHavePlainMediaTail = canPossiblyHavePlainMediaTail;
             }
@@ -6473,6 +6525,7 @@ export default class ChatBubbles {
             } else {
               const withTail = !IS_ANDROID && !IS_APPLE && !isRound && canHaveTail && !withReplies && USE_MEDIA_TAILS;
               if(withTail) bubble.classList.add('with-media-tail');
+
               const p = wrapVideo({
                 doc,
                 container: attachmentDiv,
@@ -6486,7 +6539,7 @@ export default class ChatBubbles {
                 group: this.chat.animationGroup,
                 loadPromises,
                 autoDownload: this.chat.autoDownload,
-                searchContext: isRound ? {
+                searchContext: isRound ? searchContext = {
                   peerId: this.peerId,
                   inputFilter: {_: 'inputMessagesFilterRoundVoice'},
                   threadId: this.chat.threadId,
@@ -6496,7 +6549,11 @@ export default class ChatBubbles {
                 noInfo: message.mid <= 0,
                 noAutoplayAttribute: !!messageMedia.pFlags.spoiler,
                 observer: this.observer,
-                setShowControlsOn: bubble
+                onLoad: this.onVideoLoad,
+                setShowControlsOn: bubble,
+                onGlobalMedia: (media) => {
+                  globalMediaDeferred.resolve(media);
+                }
               });
 
               if(messageMedia.pFlags.spoiler) {
@@ -6814,6 +6871,7 @@ export default class ChatBubbles {
                 group: this.chat.animationGroup,
                 message: message as Message.message,
                 observer: this.observer,
+                onLoad: this.onVideoLoad,
                 setShowControlsOn: bubble,
                 uploadingFileName: (message as Message.message).uploadingFileName[0]
               });
@@ -7413,9 +7471,10 @@ export default class ChatBubbles {
       this.appendReactionsElementToBubble(bubble, message, reactionsMessage, undefined, loadPromises);
     }
 
-    if(canHaveTail) {
+    if(canHaveTail && !isRound) {
       bubble.classList.add('can-have-tail');
-
+    }
+    if(canHaveTail || isRound) {
       bubbleContainer.append(generateTail());
     }
 
@@ -7445,7 +7504,46 @@ export default class ChatBubbles {
       this.observer.observe(bubble, this.messageEffectObserverCallback);
     }
 
+
+    if(isRound) {
+      wrapRoundVideoBubble({
+        bubble,
+        message: message as Message.message,
+        globalMediaDeferred,
+        searchContext
+      });
+    }
+
+    this.addMessageSpoilerOverlay({
+      mid: message.mid,
+      messageDiv,
+      middleware,
+      loadPromises,
+      canTranslate
+    });
+
     return ret;
+  }
+
+  private async addMessageSpoilerOverlay({mid, messageDiv, middleware, loadPromises, canTranslate}: AddMessageSpoilerOverlayParams) {
+    if(IS_FIREFOX) return; // Firefox has very poor performance when drawing on canvas
+    if(canTranslate && loadPromises) await Promise.all(loadPromises); // TranslatableMessage delays the moment when content appears in the DOM
+
+    if(!messageDiv.querySelector('.spoiler-text')) return;
+
+    const spoilerOverlay = createMessageSpoilerOverlay({
+      mid: mid,
+      messageElement: messageDiv,
+      animationGroup: this.chat.animationGroup
+    }, SolidJSHotReloadGuardProvider);
+
+    messageDiv.append(spoilerOverlay.element);
+    middleware.onDestroy(() => {
+      spoilerOverlay.dispose();
+    });
+
+    await Promise.all(loadPromises);
+    spoilerOverlay.controls.update(); // For chats that have custom theme differing from the one from settings
   }
 
   public canForward(message: Message.message | Message.messageService) {

@@ -217,7 +217,8 @@ export class AppChatsManager extends AppManager {
     MTProtoMessagePort.getInstance<false>().invokeVoid('mirror', {
       name: 'peers',
       key: '' + chat.id.toPeerId(true),
-      value: chat
+      value: chat,
+      accountNumber: this.getAccountNumber()
     });
   }
 
@@ -1043,6 +1044,17 @@ export class AppChatsManager extends AppManager {
       approved
     }).then((updates) => {
       return this.onChatUpdated(chatId, updates, true);
+    });
+  }
+
+  public getGenericChannelRecommendations() {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'channels.getChannelRecommendations',
+      params: {},
+      processResult: (messagesChats) => {
+        this.saveApiChats(messagesChats.chats);
+        return messagesChats;
+      }
     });
   }
 

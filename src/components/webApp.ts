@@ -550,7 +550,7 @@ export default class WebApp {
             params
           );
         } catch(_error) {
-          error = _error;
+          error = _error as ApiError;
         }
 
         telegramWebView.dispatchWebViewEvent('custom_method_invoked', {
