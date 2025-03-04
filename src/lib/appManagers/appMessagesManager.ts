@@ -79,7 +79,6 @@ import getUnreadReactions from './utils/messages/getUnreadReactions';
 import isMentionUnread from './utils/messages/isMentionUnread';
 import canMessageHaveFactCheck from './utils/messages/canMessageHaveFactCheck';
 import commonStateStorage from '../commonStateStorage';
-import {isDocumentHlsQualityFile} from '../hls/common';
 
 // console.trace('include');
 // TODO: если удалить диалог находясь в папке, то он не удалится из папки и будет виден в настройках
@@ -368,8 +367,6 @@ export class AppMessagesManager extends AppManager {
   private historyMaxIdSubscribed: Map<HistoryStorageKey, number> = new Map();
 
   private factCheckBatcher: Batcher<PeerId, number, FactCheck>;
-
-  public altDocsByMainMediaDocument: Map<string, Document.document[]> = new Map();
 
   protected after() {
     this.clear(true);
@@ -916,11 +913,16 @@ export class AppMessagesManager extends AppManager {
     // ! only for internal use
     processAfter?: typeof processAfter
   }>) {
-    const file = options.file;
+    let file = options.file;
     let {peerId} = options;
     peerId = this.appPeersManager.getPeerMigratedTo(peerId) || peerId;
 
     this.checkSendOptions(options);
+
+    const isDocument = !(file instanceof File) && !(file instanceof Blob);
+    if(isDocument) {
+      file = this.appDocsManager.getDoc((file as MyDocument).id) || file;
+    }
 
     const hadMessageBefore = !!options.groupedMessage;
     const message = options.groupedMessage || this.generateOutgoingMessage(peerId, options);
@@ -929,7 +931,6 @@ export class AppMessagesManager extends AppManager {
 
     const fileType = (file as Document.document).mime_type || file.type;
     const fileName = file instanceof File ? file.name : '';
-    const isDocument = !(file instanceof File) && !(file instanceof Blob);
     let caption = options.caption || '';
 
     this.log('sendFile', file, fileType);
@@ -1161,7 +1162,7 @@ export class AppMessagesManager extends AppManager {
       sendEntites = undefined;
     }
 
-    const uploadingFileName = !isDocument ? getFileNameForUpload(file) : undefined;
+    const uploadingFileName = !isDocument ? getFileNameForUpload(file as File | Blob) : undefined;
     if(uploadingFileName) {
       this.uploadFilePromises[uploadingFileName] = sentDeferred;
     }
@@ -1197,7 +1198,7 @@ export class AppMessagesManager extends AppManager {
       if(isDocument) {
         const inputMedia: InputMedia = {
           _: 'inputMediaDocument',
-          id: getDocumentInput(file),
+          id: getDocumentInput(file as MyDocument),
           pFlags: {}
         };
 
@@ -1320,9 +1321,7 @@ export class AppMessagesManager extends AppManager {
     });
 
     if(!options.isGroupedItem) {
-      sentDeferred.then((inputMedia) => {
-        this.setTyping(peerId, {_: 'sendMessageCancelAction'}, undefined, options.threadId);
-
+      const cb = (inputMedia: Awaited<typeof sentDeferred>) => {
         return this.apiManager.invokeApi('messages.sendMedia', {
           background: options.background,
           peer: this.appPeersManager.getInputPeerById(peerId),
@@ -1340,7 +1339,23 @@ export class AppMessagesManager extends AppManager {
           effect: options.effect
         }).then((updates) => {
           this.apiUpdatesManager.processUpdateMessage(updates);
-        }, (error: ApiError) => {
+        });
+      };
+
+      sentDeferred.then((inputMedia) => {
+        this.setTyping(peerId, {_: 'sendMessageCancelAction'}, undefined, options.threadId);
+
+        let promise: Promise<void>;
+        if(inputMedia._ === 'inputMediaDocument') {
+          promise = this.apiFileManager.invokeApiWithReference({
+            context: inputMedia.id as InputDocument.inputDocument,
+            callback: () => cb(inputMedia)
+          });
+        } else {
+          promise = cb(inputMedia);
+        }
+
+        return promise.catch((error: ApiError) => {
           if(attachType === 'photo' &&
             (error.type === 'PHOTO_INVALID_DIMENSIONS' ||
             error.type === 'PHOTO_SAVE_FILE_INVALID')) {
@@ -3840,7 +3855,7 @@ export class AppMessagesManager extends AppManager {
       }
     }
 
-    const mediaContext: ReferenceContext = {
+    const mediaContext: ReferenceContext = options.isOutgoing ? undefined : {
       type: 'message',
       peerId,
       messageId: mid
@@ -3962,11 +3977,12 @@ export class AppMessagesManager extends AppManager {
       let migrateFrom: PeerId, migrateTo: PeerId;
 
       if((action as MessageAction.messageActionChatEditPhoto).photo) {
-        (action as MessageAction.messageActionChatEditPhoto).photo = this.appPhotosManager.savePhoto((action as MessageAction.messageActionChatEditPhoto).photo, mediaContext);
+        (action as MessageAction.messageActionChatEditPhoto).photo =
+          this.appPhotosManager.savePhoto((action as MessageAction.messageActionChatEditPhoto).photo, mediaContext);
       }
 
-      if((action as any).document) {
-        (action as any).document = this.appDocsManager.saveDoc((action as any).photo, mediaContext);
+      if('document' in action) {
+        action.document = this.appDocsManager.saveDoc(action.document as Document, mediaContext);
       }
 
       switch(action._) {
@@ -4170,14 +4186,7 @@ export class AppMessagesManager extends AppManager {
         } else {
           const originalDoc = media.document;
 
-          const supportsHlsStreaming = (media.alt_documents || []).some((doc) => isDocumentHlsQualityFile(doc));
-
-          media.document = this.appDocsManager.saveDoc(originalDoc, mediaContext, supportsHlsStreaming); // 11.04.2020 warning
-          // ??? 11.04.2020 warning
-          media.alt_documents &&= media.alt_documents?.map((altDoc) =>
-            this.appDocsManager.saveDoc(altDoc, mediaContext)).filter(Boolean) || []; // idk why but sometimes there is [undefined] in the alt_documents
-
-          if(media.alt_documents) this.altDocsByMainMediaDocument.set(media.document.id.toString(), media.alt_documents as Document.document[]);
+          media.document = this.appDocsManager.saveDoc(originalDoc, mediaContext, media.alt_documents);
 
           if(!media.document && originalDoc._ !== 'documentEmpty') {
             unsupported = true;
@@ -8616,10 +8625,6 @@ export class AppMessagesManager extends AppManager {
     }
 
     return this.factCheckBatcher.addToBatch(peerId, mid);
-  }
-
-  public getAltDocsByDocument(doc: Document.document) {
-    return this.altDocsByMainMediaDocument.get(doc.id.toString());
   }
 }
 

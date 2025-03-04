@@ -82,7 +82,8 @@ declare global {
   type MTMimeType = 'video/quicktime' | 'image/gif' | 'image/jpeg' | 'application/pdf' |
     'video/mp4' | 'image/webp' | 'audio/mpeg' | 'audio/ogg' | 'application/octet-stream' |
     'application/x-tgsticker' | 'video/webm' | 'image/svg+xml' | 'image/png' | 'application/json' |
-    'application/x-tgwallpattern' | 'audio/wav' | 'image/avif' | 'image/jxl' | 'image/bmp';
+    'application/x-tgwallpattern' | 'audio/wav' | 'image/avif' | 'image/jxl' | 'image/bmp' |
+    'application/x-mpegurl';
 
   type MTFileExtension = 'mov' | 'gif' | 'pdf' | 'jpg' | 'jpeg' | 'wav' |
     'tgv' | 'tgs' | 'svg' | 'mp4' | 'webm' | 'webp' | 'mp3' | 'ogg' | 'json' |
@@ -120,7 +121,8 @@ declare global {
     `FLOOD_PREMIUM_WAIT_${number}` | 'STORY_ID_TOO_MANY' | `FILE_REFERENCE_${number}_EXPIRED` |
     'ADDRESS_STREET_LINE1_INVALID' | 'ADDRESS_STREET_LINE2_INVALID' | 'ADDRESS_COUNTRY_INVALID' |
     'ADDRESS_CITY_INVALID' | 'ADDRESS_STATE_INVALID' | 'ADDRESS_POSTCODE_INVALID' |
-    'REQ_INFO_NAME_INVALID' | 'REQ_INFO_EMAIL_INVALID' | 'REQ_INFO_PHONE_INVALID';
+    'REQ_INFO_NAME_INVALID' | 'REQ_INFO_EMAIL_INVALID' | 'REQ_INFO_PHONE_INVALID' |
+    'FILE_REFERENCE_INVALID';
 
   type ErrorType = LocalErrorType | ServerErrorType;
 
