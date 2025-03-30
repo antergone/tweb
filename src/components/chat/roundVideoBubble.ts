@@ -5,11 +5,10 @@ import pause from '../../helpers/schedulers/pause';
 import {Message} from '../../layer';
 import {i18n} from '../../lib/langPack';
 import rootScope from '../../lib/rootScope';
-import BezierEasing from '../../vendor/bezierEasing';
 
 import appMediaPlaybackController, {MediaSearchContext} from '../appMediaPlaybackController';
 import Icon from '../icon';
-import {animateValue, lerp} from '../mediaEditor/utils';
+import {animateValue, lerp, simpleEasing} from '../mediaEditor/utils';
 import PopupPremium from '../popups/premium';
 import {hideToast, toastNew} from '../toast';
 import wrapDocument from '../wrappers/document';
@@ -22,7 +21,6 @@ type WrapRoundVideoBubbleOptions = {
 };
 
 const ANIMATION_TIME = 180;
-const simpleEasing = BezierEasing(0.25, 0.1, 0.25, 1);
 
 export function wrapRoundVideoBubble({
   bubble,
@@ -208,7 +206,7 @@ export function wrapRoundVideoBubble({
           hideToast();
           PopupPremium.show({feature: 'voice_to_text'});
         })]
-      })
+      });
       return;
     }
 
@@ -222,15 +220,15 @@ export function wrapRoundVideoBubble({
       const transcribedText = document.createElement('div');
       transcribedText.classList.add('video-transcribed-text');
       try {
-        const transcribeResult = await rootScope.managers.appMessagesManager.transcribeAudio(message);
+        const transcribeResult = await rootScope.managers.appMessagesManager.transcribeAudio(message, true);
         if(!transcribeResult.text) throw '';
         transcribedText.innerText = transcribeResult.text;
-      } catch{
+      } catch(err) {
         transcribedText.append(i18n('Chat.Voice.Transribe.Error'));
       }
       audioMessageContainer.append(transcribedText);
       transcribedText.append(audioSentTime);
-      transcribedText.append(createElementFromMarkup(`<span class="clearfix"></span>`))
+      transcribedText.append(createElementFromMarkup(`<span class="clearfix"></span>`));
 
       spinner.remove();
     }

@@ -368,6 +368,8 @@ export class AppMessagesManager extends AppManager {
 
   private factCheckBatcher: Batcher<PeerId, number, FactCheck>;
 
+  private waitingTranscriptions: Map<string, CancellablePromise<MessagesTranscribedAudio>>;
+
   protected after() {
     this.clear(true);
 
@@ -553,6 +555,7 @@ export class AppMessagesManager extends AppManager {
   public clear = (init?: boolean) => {
     if(this.middleware) {
       this.middleware.clean();
+      this.waitingTranscriptions.forEach((promise) => promise.reject());
     } else {
       this.middleware = getMiddleware();
       this.uploadFilePromises = {};
@@ -568,14 +571,15 @@ export class AppMessagesManager extends AppManager {
     this.threadsServiceMessagesIdsStorage = {};
     this.threadsToReplies = {};
     this.references = {};
+    this.waitingTranscriptions = new Map();
 
     this.dialogsStorage && this.dialogsStorage.clear(init);
     this.filtersStorage && this.filtersStorage.clear(init);
   };
 
   public getInputEntities(entities: MessageEntity[]) {
-    const sendEntites = copy(entities);
-    forEachReverse(sendEntites, (entity, idx, arr) => {
+    const sendEntities = copy(entities);
+    forEachReverse(sendEntities, (entity, idx, arr) => {
       if(LOCAL_ENTITIES.has(entity._)) {
         arr.splice(idx, 1);
       } else if(entity._ === 'messageEntityMentionName') {
@@ -583,7 +587,12 @@ export class AppMessagesManager extends AppManager {
         (entity as any as MessageEntity.inputMessageEntityMentionName).user_id = this.appUsersManager.getUserInput(entity.user_id);
       }
     });
-    return sendEntites;
+
+    if(!sendEntities.length) {
+      return;
+    }
+
+    return sendEntities;
   }
 
   public invokeAfterMessageIsSent(tempId: number, callbackName: string, callback: (message: MyMessage) => Promise<any>) {
@@ -622,10 +631,7 @@ export class AppMessagesManager extends AppManager {
       [text, entities] = parseMarkdown(text, entities);
     }
 
-    let sendEntites = this.getInputEntities(entities);
-    if(!sendEntites.length) {
-      sendEntites = undefined;
-    }
+    const sendEntities = this.getInputEntities(entities);
 
     const inputMediaWebPage = this.getInputMediaWebPage(options);
 
@@ -635,7 +641,7 @@ export class AppMessagesManager extends AppManager {
       id: message.id,
       message: text,
       media: options.newMedia,
-      entities: sendEntites,
+      entities: sendEntities,
       no_webpage: options.noWebPage,
       schedule_date,
       invert_media: options.invertMedia,
@@ -658,7 +664,7 @@ export class AppMessagesManager extends AppManager {
     });
   }
 
-  public async transcribeAudio(message: Message.message): Promise<MessagesTranscribedAudio> {
+  public async transcribeAudio(message: Message.message, noPending?: boolean): Promise<MessagesTranscribedAudio> {
     const {id, peerId} = message;
 
     const process = (result: MessagesTranscribedAudio) => {
@@ -670,18 +676,29 @@ export class AppMessagesManager extends AppManager {
         text: result.text,
         transcription_id: result.transcription_id
       });
+
+      return result;
     };
 
-    return this.apiManager.invokeApiSingleProcess({
+    const key = `${peerId}_${message.mid}`;
+    let promise: CancellablePromise<MessagesTranscribedAudio>;
+    if(noPending) {
+      promise = this.waitingTranscriptions.get(key);
+      if(!promise) {
+        this.waitingTranscriptions.set(key, promise = deferredPromise());
+        promise.finally(() => {
+          this.waitingTranscriptions.delete(key);
+        });
+      }
+    }
+
+    const ret = this.apiManager.invokeApiSingleProcess({
       method: 'messages.transcribeAudio',
       params: {
         peer: this.appPeersManager.getInputPeerById(peerId),
         msg_id: id
       },
-      processResult: (result) => {
-        process(result);
-        return result;
-      },
+      processResult: process,
       processError: (error) => {
         if(error.type === 'TRANSCRIPTION_FAILED' || error.type === 'MSG_VOICE_MISSING') {
           process({
@@ -695,6 +712,8 @@ export class AppMessagesManager extends AppManager {
         throw error;
       }
     });
+
+    return promise || ret;
   }
 
   public async sendText(
@@ -743,10 +762,7 @@ export class AppMessagesManager extends AppManager {
       [text, entities] = parseMarkdown(text, entities);
     }
 
-    let sendEntites = this.getInputEntities(entities);
-    if(!sendEntites.length) {
-      sendEntites = undefined;
-    }
+    const sendEntities = this.getInputEntities(entities);
 
     const message = this.generateOutgoingMessage(peerId, options);
     message.entities = entities;
@@ -788,7 +804,7 @@ export class AppMessagesManager extends AppManager {
           message: text,
           random_id: message.random_id,
           reply_to: replyTo,
-          entities: sendEntites,
+          entities: sendEntities,
           clear_draft: options.clearDraft,
           schedule_date: options.scheduleDate || undefined,
           silent: options.silent,
@@ -1157,10 +1173,7 @@ export class AppMessagesManager extends AppManager {
       }
     }
 
-    let sendEntites = this.getInputEntities(entities);
-    if(!sendEntites.length) {
-      sendEntites = undefined;
-    }
+    const sendEntities = this.getInputEntities(entities);
 
     const uploadingFileName = !isDocument ? getFileNameForUpload(file as File | Blob) : undefined;
     if(uploadingFileName) {
@@ -1331,7 +1344,7 @@ export class AppMessagesManager extends AppManager {
           reply_to: options.replyTo,
           schedule_date: options.scheduleDate,
           silent: options.silent,
-          entities: sendEntites,
+          entities: sendEntities,
           clear_draft: options.clearDraft,
           send_as: options.sendAsPeerId ? this.appPeersManager.getInputPeerById(options.sendAsPeerId) : undefined,
           update_stickersets_order: options.updateStickersetOrder,
@@ -1420,9 +1433,6 @@ export class AppMessagesManager extends AppManager {
     }
 
     let sendEntities = this.getInputEntities(entities);
-    if(!sendEntities.length) {
-      sendEntities = undefined;
-    }
 
     const log = this.log.bindPrefix('sendGrouped');
     log(options);
@@ -6716,6 +6726,17 @@ export class AppMessagesManager extends AppManager {
     const peerId = this.appPeersManager.getPeerId(update.peer);
     const text = update.text;
     const mid = this.appMessagesIdsManager.generateMessageId(update.msg_id, channelId);
+
+    const key = `${peerId}_${mid}`;
+    const waitingPromise = this.waitingTranscriptions.get(key);
+    if(!update.pFlags.pending && waitingPromise) {
+      waitingPromise.resolve({
+        _: 'messages.transcribedAudio',
+        pFlags: {},
+        text,
+        transcription_id: update.transcription_id
+      });
+    }
 
     this.rootScope.dispatchEvent('message_transcribed', {peerId, mid, text, pending: update.pFlags.pending});
   };
