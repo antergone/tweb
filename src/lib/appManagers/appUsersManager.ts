@@ -1264,6 +1264,16 @@ export class AppUsersManager extends AppManager {
     return promise;
   }
 
+  /**
+   * The amount of stars necessary to be paid for every message if the target user had enabled it
+   */
+  public async getStarsAmount(userId: UserId): Promise<number | undefined> {
+    const requirement = await this.getRequirementToContact(userId);
+    const starsAmount = requirement?._ === 'requirementToContactPaidMessages' ? Number(requirement.stars_amount) : undefined;
+
+    return starsAmount;
+  }
+
   private getRequirementsToContact() {
     if(this.requirementsToContactProcessing) {
       return;
@@ -1287,6 +1297,18 @@ export class AppUsersManager extends AppManager {
           this.getRequirementsToContact();
         }
       });
+    });
+  }
+
+  public async getPaidMessagesRevenue(userId: UserId) {
+    const revenue = await this.apiManager.invokeApi('account.getPaidMessagesRevenue', {user_id: this.getUserInput(userId)});
+    return +revenue.stars_amount;
+  }
+
+  public async addNoPaidMessagesException(userId: UserId, refundCharged: boolean) {
+    return this.apiManager.invokeApi('account.addNoPaidMessagesException', {
+      user_id: this.getUserInput(userId),
+      refund_charged: refundCharged
     });
   }
 }
