@@ -31,7 +31,7 @@ import lottieLoader from '../rlottie/lottieLoader';
 import wrapPhoto from '../../components/wrappers/photo';
 import AppEditFolderTab from '../../components/sidebarLeft/tabs/editFolder';
 import appSidebarLeft from '../../components/sidebarLeft';
-import {attachClickEvent} from '../../helpers/dom/clickEvent';
+import {attachClickEvent, CLICK_EVENT_NAME, simulateClickEvent} from '../../helpers/dom/clickEvent';
 import positionElementByIndex from '../../helpers/dom/positionElementByIndex';
 import replaceContent from '../../helpers/dom/replaceContent';
 import ConnectionStatusComponent from '../../components/connectionStatus';
@@ -117,6 +117,8 @@ import wrapFolderTitle from '../../components/wrappers/folderTitle';
 import {SequentialCursorFetcher, SequentialCursorFetcherResult} from '../../helpers/sequentialCursorFetcher';
 import SortedDialogList from '../../components/sortedDialogList';
 import throttle from '../../helpers/schedulers/throttle';
+import {MAX_SIDEBAR_WIDTH} from '../../components/sidebarLeft/constants';
+import {unwrap} from 'solid-js/store';
 
 export const DIALOG_LIST_ELEMENT_TAG = 'A';
 const DIALOG_LOAD_COUNT = 10;
@@ -497,7 +499,7 @@ class ForumTab extends SliderSuperTabEventable {
     this.title.replaceWith(this.rows);
     this.rows.append(this.title, this.subtitle);
 
-    this.xd = new Some3(this.peerId, isFloating ? 80 : 0);
+    this.xd = new Some3(this.peerId, isFloating);
     this.xd.scrollable = this.scrollable;
     this.xd.sortedList = new SortedDialogList({
       itemSize: 64,
@@ -710,8 +712,6 @@ class Some<T extends AnyDialog = AnyDialog> {
     const items = this.sortedList.getSortedItems();
     const last = items[items.length - 1];
 
-    console.log('[my-debug] list shrinked: count, index :>> ', items.length, last?.index);
-
     this.cursorFetcher.setFetchedItemsCount(items.length);
     this.cursorFetcher.setNeededCount(items.length);
     this.cursorFetcher.setCursor(last?.index);
@@ -740,7 +740,7 @@ class Some<T extends AnyDialog = AnyDialog> {
   }
 
   /**
-   * @returns {boolean} Returns true if a new dialog was just added
+   * @returns Returns `true` if a new dialog was just added
    */
   private addOrDeleteDialogIfNeeded(dialog: T, key: any) {
     if(!this.canUpdateDialog(dialog)) {
@@ -789,7 +789,6 @@ class Some<T extends AnyDialog = AnyDialog> {
   };
 
   protected onScrolledBottom() {
-    console.log('[my-debug] try to fetch more');
     this.cursorFetcher.tryToFetchMore();
   }
 
@@ -897,8 +896,6 @@ class Some<T extends AnyDialog = AnyDialog> {
 
     this.checkForDialogsPlaceholder();
 
-    console.log('[my-debug] loadDialogs offsetIndex :>> ', offsetIndex);
-
     /**
      * The first time getDialogs might return `count: null`, which is not good for this
      * infinite loading implementation, that's why we're refetching after 0.5 seconds to
@@ -919,11 +916,8 @@ class Some<T extends AnyDialog = AnyDialog> {
 
     const result = await ackedResult.result;
 
-    console.log('[my-debug] loadDialogs result :>> ', result);
-
     if(shouldRefetch) {
       setTimeout(async() => {
-        console.log('[my-debug] Refetching dialogs bug');
         const {totalCount} = await this.loadDialogsInner();
         this.cursorFetcher.setFetchedItemsCount(totalCount);
       }, 500);
@@ -1036,7 +1030,7 @@ class Some<T extends AnyDialog = AnyDialog> {
 }
 
 class Some3 extends Some<ForumTopic> {
-  constructor(public peerId: PeerId, public paddingX: number) {
+  constructor(public peerId: PeerId, public isFloating: boolean) {
     super();
 
     this.skipMigrated = !!CAN_HIDE_TOPIC;
@@ -1064,7 +1058,7 @@ class Some3 extends Some<ForumTopic> {
     });
 
     this.listenerSetter.add(rootScope)('dialogs_multiupdate', (dialogs) => {
-      for(const [peerId, {dialog, topics}] of dialogs) {
+      for(const [peerId, {topics}] of dialogs) {
         if(peerId !== this.peerId || !topics?.size) {
           continue;
         }
@@ -1111,7 +1105,7 @@ class Some3 extends Some<ForumTopic> {
       this.deleteDialogByKey(this.getDialogKey(dialog));
     });
 
-    this.listenerSetter.add(rootScope)('dialog_draft', ({dialog, drop, peerId}) => {
+    this.listenerSetter.add(rootScope)('dialog_draft', ({dialog, drop}) => {
       if(!isForumTopic(dialog) || dialog.peerId !== this.peerId) {
         return;
       }
@@ -1136,12 +1130,15 @@ class Some3 extends Some<ForumTopic> {
     return (): DOMRectEditable => {
       const sidebarRect = appSidebarLeft.rect;
       const paddingY = 56;
+      const paddingX = this.isFloating ? 80 : 0;
+      const width = this.isFloating ? MAX_SIDEBAR_WIDTH - paddingX : sidebarRect.width;
+
       return {
         top: paddingY,
         right: sidebarRect.right,
         bottom: 0,
-        left: this.paddingX,
-        width: sidebarRect.width - this.paddingX,
+        left: paddingX,
+        width,
         height: sidebarRect.height - paddingY
       };
     };
@@ -1314,7 +1311,6 @@ export class Some2 extends Some<Dialog> {
     const scrollable = new Scrollable(null, 'CL', 500);
     scrollable.container.dataset.filterId = '' + filterId;
 
-    console.log('[my-debug] sorted dialog list created');
     const indexKey = getDialogIndexKey(filter.localId);
     const sortedDialogList = new SortedDialogList({
       appDialogsManager,
@@ -1326,7 +1322,6 @@ export class Some2 extends Some<Dialog> {
       onListShrinked: this.onListShrinked,
       itemSize: 72,
       onListLengthChange: () => {
-        console.log('[my-debug] onListLengthChange :>> ', sortedDialogList.itemsLength());
         scrollable.onSizeChange();
         appDialogsManager.onListLengthChange?.();
       }
@@ -1779,7 +1774,7 @@ export class AppDialogsManager {
     apiManagerProxy.getState().then((state) => {
       const [appSettings, setAppSettings] = useAppSettings();
       // * it should've had a better place :(
-      appMediaPlaybackController.setPlaybackParams(appSettings.playbackParams);
+      appMediaPlaybackController.setPlaybackParams(unwrap(appSettings.playbackParams));
       appMediaPlaybackController.addEventListener('playbackParams', (params) => {
         setAppSettings('playbackParams', params);
       });
@@ -2835,6 +2830,19 @@ export class AppDialogsManager {
       const lastMsgId = +elem.dataset.mid || undefined;
       const threadId = +elem.dataset.threadId || undefined;
 
+      const isSponsored = elem.dataset.sponsored === 'true';
+      if(isSponsored) {
+        const chip = elem.querySelector('.sponsored-peer-chip');
+        // if click was inside chip, open menu
+        const rect = chip.getBoundingClientRect();
+        if(e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+          if(!IS_TOUCH_SUPPORTED) {
+            simulateClickEvent(chip as HTMLElement);
+          }
+          return;
+        }
+      }
+
       if(onFound?.(elem) === false) {
         return;
       }
@@ -3286,7 +3294,7 @@ export class AppDialogsManager {
       dialogElement.createUnreadBadge();
     }
 
-    const hasUnreadAvatarBadge = this.xd !== this.xds[FOLDER_ID_ARCHIVE] && !isTopic && (!!this.forumTab || appSidebarLeft.isCollapsed()) && this.xd.getDialogElement(peerId) === dialogElement && isDialogUnread;
+    const hasUnreadAvatarBadge = this.xd !== this.xds[FOLDER_ID_ARCHIVE] && !isTopic && (!!this.forumTab || appSidebarLeft.isCollapsed()) && isDialogUnread;
 
     const isUnreadAvatarBadgeMounted = !!dom.unreadAvatarBadge;
     if(hasUnreadAvatarBadge) {
