@@ -25,7 +25,7 @@ import {MOUNT_CLASS_TO} from '../../config/debug';
 import appNavigationController from '../../components/appNavigationController';
 import AppPrivateSearchTab from '../../components/sidebarRight/tabs/search';
 import I18n, {i18n, join, LangPackKey} from '../langPack';
-import {ChatFull, ChatParticipants, Message, MessageAction, MessageMedia, SendMessageAction, User, Chat as MTChat, UrlAuthResult, WallPaper, Config, AttachMenuBot, Peer, InputChannel, HelpPeerColors, Reaction, Document, MessageEntity, PeerColor, SponsoredMessage} from '../../layer';
+import {ChatFull, ChatParticipants, Message, MessageAction, MessageMedia, SendMessageAction, User, Chat as MTChat, UrlAuthResult, WallPaper, Config, AttachMenuBot, Peer, InputChannel, HelpPeerColors, Reaction, Document, MessageEntity, PeerColor, SponsoredMessage, InputGroupCall} from '../../layer';
 import PeerTitle from '../../components/peerTitle';
 import {PopupPeerCheckboxOptions} from '../../components/popups/peer';
 import blurActiveElement from '../../helpers/dom/blurActiveElement';
@@ -685,6 +685,9 @@ export class AppImManager extends EventListenerBase<{
       savedReactionTags.splice(0, savedReactionTags.length, ...tags);
     });
 
+    // * preload sensitive content settings
+    this.managers.appPrivacyManager.getSensitiveContentSettings();
+
     // new PasscodeLockScreenControler().lock();
 
     this.onHashChange(true);
@@ -845,12 +848,17 @@ export class AppImManager extends EventListenerBase<{
     return attachMenuBot;
   }
 
-  public async openWebApp(options: Partial<RequestWebViewOptions>) {
+  public async openWebApp(options: Partial<RequestWebViewOptions> & {
+    onClose?: () => void
+  }) {
     options.botId ??= options.attachMenuBot?.bot_id;
     options.themeParams ??= {
       _: 'dataJSON',
       data: JSON.stringify(themeController.getThemeParamsForWebView())
     };
+
+    const onClose = options.onClose;
+    delete options.onClose; // to avoid passing it to the worker
 
     if(
       !options.attachMenuBot/*  &&
@@ -897,9 +905,10 @@ export class AppImManager extends EventListenerBase<{
         webViewResultUrl,
         webViewOptions: options as RequestWebViewOptions,
         attachMenuBot: options.attachMenuBot,
-        cacheKey
+        cacheKey,
+        onClose
       };
-      if(!IS_WEB_APP_BROWSER_SUPPORTED) {
+      if(!IS_WEB_APP_BROWSER_SUPPORTED || options.forcePopup) {
         PopupElement.createPopup(PopupWebApp, webAppOptions);
       } else {
         openWebAppInAppBrowser(webAppOptions);
@@ -1213,8 +1222,8 @@ export class AppImManager extends EventListenerBase<{
             this.setPeer({peerId: dialog.peerId});
           }
         });
-      } else if(key === 'ArrowUp' && this.chat.type !== ChatType.Scheduled) {
-        if(!chat.input.editMsgId && chat.input.isInputEmpty()) {
+      } else if(key === 'ArrowUp' && this.chat?.type !== ChatType.Scheduled) {
+        if(!chat?.input?.editMsgId && chat?.input?.isInputEmpty()) {
           this.managers.appMessagesManager.getFirstMessageToEdit(chat.peerId, chat.threadId).then((message) => {
             if(message) {
               chat.input.initMessageEditing(message.mid);
@@ -1624,7 +1633,7 @@ export class AppImManager extends EventListenerBase<{
 
         call = await this.managers.appGroupCallsManager.createGroupCall(chatId);
       } else {
-        call = chatFull.call;
+        call = chatFull.call as InputGroupCall.inputGroupCall;
       }
 
       groupCallsController.joinGroupCall(chatId, call.id, true, false);

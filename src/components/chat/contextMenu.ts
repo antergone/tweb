@@ -7,7 +7,7 @@
 import type {MyDocument} from '../../lib/appManagers/appDocsManager';
 import type Chat from './chat';
 import IS_TOUCH_SUPPORTED from '../../environment/touchSupport';
-import ButtonMenu, {ButtonMenuItemOptions} from '../buttonMenu';
+import ButtonMenu, {ButtonMenuItemOptions, ButtonMenuItemOptionsVerifiable} from '../buttonMenu';
 import PopupDeleteMessages from '../popups/deleteMessages';
 import PopupForward from '../popups/forward';
 import PopupPinMessage from '../popups/unpinMessage';
@@ -19,7 +19,7 @@ import findUpClassName from '../../helpers/dom/findUpClassName';
 import cancelEvent from '../../helpers/dom/cancelEvent';
 import {attachClickEvent, simulateClickEvent} from '../../helpers/dom/clickEvent';
 import isSelectionEmpty from '../../helpers/dom/isSelectionEmpty';
-import {Message, Poll, Chat as MTChat, MessageMedia, AvailableReaction, MessageEntity, InputStickerSet, StickerSet, Document, Reaction, Photo, SponsoredMessage, ChannelParticipant, TextWithEntities, SponsoredPeer} from '../../layer';
+import {Message, Poll, Chat as MTChat, MessageMedia, AvailableReaction, MessageEntity, InputStickerSet, StickerSet, Document, Reaction, Photo, SponsoredMessage, ChannelParticipant, TextWithEntities, SponsoredPeer, TodoItem, TodoCompletion} from '../../layer';
 import assumeType from '../../helpers/assumeType';
 import PopupSponsored from '../popups/sponsored';
 import ListenerSetter from '../../helpers/listenerSetter';
@@ -41,7 +41,7 @@ import {SERVICE_PEER_ID} from '../../lib/mtproto/mtproto_config';
 import {MessagesStorageKey, MyMessage} from '../../lib/appManagers/appMessagesManager';
 import filterUnique from '../../helpers/array/filterUnique';
 import replaceContent from '../../helpers/dom/replaceContent';
-import wrapEmojiText from '../../lib/richTextProcessor/wrapEmojiText';
+import wrapEmojiText, {wrapEmojiTextWithEntities} from '../../lib/richTextProcessor/wrapEmojiText';
 import deferredPromise, {CancellablePromise} from '../../helpers/cancellablePromise';
 import PopupStickers from '../popups/stickers';
 import getMediaFromMessage from '../../lib/appManagers/utils/messages/getMediaFromMessage';
@@ -80,6 +80,11 @@ import getPeerTitle from '../wrappers/getPeerTitle';
 import {getFullDate} from '../../helpers/date/getFullDate';
 import PaidMessagesInterceptor, {PAYMENT_REJECTED} from './paidMessagesInterceptor';
 import {MySponsoredPeer} from '../../lib/appManagers/appChatsManager';
+import {PopupChecklist} from '../popups/checklist';
+import createSubmenuTrigger from '../createSubmenuTrigger';
+import noop from '../../helpers/noop';
+import {isSensitive} from '../../helpers/restrictions';
+import {hasSensitiveSpoiler} from '../wrappers/mediaSpoiler';
 
 type ChatContextMenuButton = ButtonMenuItemOptions & {
   verify: () => boolean | Promise<boolean>,
@@ -190,6 +195,7 @@ export default class ChatContextMenu {
   private mainMessage: Message.message | Message.messageService;
   private sponsoredMessage: SponsoredMessage;
   private noForwards: boolean;
+  private checklistItem: {item: TodoItem, completion?: TodoCompletion};
 
   private reactionsMenu: ChatReactionsMenu;
   private listenerSetter: ListenerSetter;
@@ -264,6 +270,33 @@ export default class ChatContextMenu {
       callback: this.onContextMenu,
       listenerSetter: this.attachListenerSetter
     });
+
+    // * handle message deletion
+    this.attachListenerSetter.add(rootScope)('history_delete', ({peerId, msgs}) => {
+      if(peerId !== this.chat.peerId) {
+        return;
+      }
+
+      if(this.mid && msgs.has(this.mid)) {
+        contextMenuController.close();
+        return;
+      }
+
+      if(this.chat.selection.isSelecting && this.selectedMessages) {
+        const hasDeletedSelectedMessage = this.selectedMessages.some((message) => msgs.has(message.mid));
+        if(hasDeletedSelectedMessage) {
+          contextMenuController.close();
+          return;
+        }
+      }
+
+      if(this.groupedMessages) {
+        const hasDeletedGroupedMessage = this.groupedMessages.some((message) => msgs.has(message.mid));
+        if(hasDeletedGroupedMessage) {
+          contextMenuController.close();
+        }
+      }
+    });
   }
 
   public onContextMenu = (e: MouseEvent | Touch | TouchEvent) => {
@@ -302,6 +335,11 @@ export default class ChatContextMenu {
     }
 
     const tagReactionElement = findUpClassName(e.target, 'reaction-tag');
+    let checklistItemId: number;
+    const checklistItemElement = (e.target as HTMLElement).closest('[data-checklist-item-id]');
+    if(checklistItemElement) {
+      checklistItemId = +(checklistItemElement as HTMLElement).dataset.checklistItemId;
+    }
 
     const r = async() => {
       const isSponsored = this.isSponsored = mid < 0;
@@ -375,6 +413,16 @@ export default class ChatContextMenu {
       this.linkToMessage = await this.getUrlToMessage();
       this.selectedMessagesText = await this.getSelectedMessagesText();
       this.messageLanguage = this.selectedMessages || !this.message ? undefined : await detectLanguageForTranslation((this.message as Message.message).message);
+
+      if(checklistItemId) {
+        const media = (this.message as Message.message).media as MessageMedia.messageMediaToDo;
+        this.checklistItem = {
+          item: media.todo.list.find((item) => item.id === checklistItemId),
+          completion: media.completions?.find((completion) => completion.id === checklistItemId)
+        }
+      } else {
+        this.checklistItem = undefined;
+      }
 
       const initResult = await this.init();
       if(!initResult) {
@@ -573,6 +621,8 @@ export default class ChatContextMenu {
       return toAdd ? !found : found;
     };
 
+    const self = this;
+
     this.buttons = [{
       // secondary: true,
       onClick: () => {
@@ -586,7 +636,12 @@ export default class ChatContextMenu {
       checkForClose: () => {
         return this.canViewReadTime !== undefined;
       }
-    }, {
+    }, createSubmenuTrigger({
+      icon: 'more',
+      get regularText() { return self.checklistItem ? wrapEmojiTextWithEntities(self.checklistItem.item.title) : undefined },
+      verify: () => this.checklistItem !== undefined,
+      separatorDown: true
+    }, this.createChecklistItemSubmenu) as ChatContextMenuButton, {
       icon: 'send2',
       text: 'MessageScheduleSend',
       onClick: this.onSendScheduledClick,
@@ -670,6 +725,16 @@ export default class ChatContextMenu {
       onClick: this.onEditClick,
       verify: async() => (await this.managers.appMessagesManager.canEditMessage(this.message, 'text')) &&
         !!this.chat.input.messageInput
+    }, {
+      icon: 'plusround',
+      text: 'ChecklistAddTasks',
+      onClick: this.onAddTaskClick,
+      verify: async() => {
+        if(this.message._ !== 'message' || this.message.media?._ !== 'messageMediaToDo') return false
+        if(this.message.pFlags.is_outgoing) return false
+        return this.message.pFlags.out || this.message.media.todo.pFlags.others_can_append
+      }/* ,
+      cancelEvent: true */
     }, {
       icon: 'factcheck',
       text: (this.mainMessage as Message.message)?.factcheck ? 'EditFactCheck' : 'AddFactCheck',
@@ -786,8 +851,8 @@ export default class ChatContextMenu {
     }, {
       icon: 'download',
       text: 'MediaViewer.Context.Download',
-      onClick: () => ChatContextMenu.onDownloadClick(this.message, this.noForwards),
-      verify: () => ChatContextMenu.canDownload(this.message, this.target, this.noForwards)
+      onClick: () => ChatContextMenu.onDownloadClick(this.message, this.noForwards, this.chat.container),
+      verify: () => ChatContextMenu.canDownload(this.message, this.target, this.noForwards, this.chat.container)
     }, {
       icon: 'checkretract',
       text: 'Chat.Poll.Unvote',
@@ -836,8 +901,8 @@ export default class ChatContextMenu {
     }, {
       icon: 'download',
       text: 'Message.Context.Selection.Download',
-      onClick: () => ChatContextMenu.onDownloadClick(this.selectedMessages, this.noForwards),
-      verify: () => this.selectedMessages && ChatContextMenu.canDownload(this.selectedMessages, undefined, this.noForwards),
+      onClick: () => ChatContextMenu.onDownloadClick(this.selectedMessages, this.noForwards, this.chat.container),
+      verify: () => this.selectedMessages && ChatContextMenu.canDownload(this.selectedMessages, undefined, this.noForwards, this.chat.container),
       withSelection: true
     }, {
       icon: 'flag',
@@ -926,23 +991,99 @@ export default class ChatContextMenu {
     }];
   }
 
-  public static canDownload(message: MyMessage | MyMessage[], withTarget?: HTMLElement, noForwards?: boolean): boolean {
+  private createChecklistItemSubmenu = async() => {
+    const {item, completion} = this.checklistItem;
+    const message = this.message as Message.message & {media: MessageMedia.messageMediaToDo};
+    const canEdit = await this.managers.appMessagesManager.canEditMessage(message, 'text');
+    const buttons: ButtonMenuItemOptionsVerifiable[] = [
+      {
+        icon: 'check',
+        regularText: completion ? formatFullSentTime(completion.date) : undefined,
+        separatorDown: true,
+        verify: () => !!completion,
+        onClick: noop
+      },
+      {
+        icon: completion ? 'checklist_undone' : 'checklist_done',
+        text: completion ? 'ChecklistUncheck' : 'ChecklistCheck',
+        verify: () => message.media.todo.pFlags.others_can_complete || message.fromId === this.managers.rootScope.myId,
+        onClick: () => {
+          this.managers.appMessagesManager.updateTodo({
+            peerId: message.peerId,
+            mid: message.mid,
+            taskId: item.id,
+            action: completion ? 'uncomplete' : 'complete'
+          })
+        }
+      },
+      {
+        icon: 'copy',
+        text: 'Copy',
+        onClick: () => copyTextToClipboard(item.title.text)
+      },
+      {
+        icon: 'edit',
+        text: 'ChecklistEditItem',
+        verify: () => canEdit,
+        onClick: () => {
+          PopupElement.createPopup(PopupChecklist, {
+            chat: this.chat,
+            editMessage: message,
+            focusItemId: item.id
+          }).show();
+        }
+      },
+      {
+        icon: 'delete',
+        text: 'ChecklistDeleteItem',
+        verify: () => canEdit,
+        separator: true,
+        danger: true,
+        onClick: async() => {
+          await this.managers.appMessagesManager.editMessage(message, message.message, {
+            newMedia: {
+              _: 'inputMediaTodo',
+              todo: {
+                ...message.media.todo,
+                list: message.media.todo.list.filter((v) => v.id !== item.id)
+              }
+            }
+          });
+        }
+      }
+    ]
+
+    return ButtonMenu({
+      buttons: await filterAsync(buttons, (button) => button.verify?.() ?? true)
+    })
+  }
+
+  public static canDownload(
+    message: MyMessage | MyMessage[],
+    withTarget?: HTMLElement,
+    noForwards?: boolean,
+    container?: HTMLElement
+  ): boolean {
     if(Array.isArray(message)) {
-      return message.some((message) => ChatContextMenu.canDownload(message, withTarget, noForwards));
+      return message.some((message) => ChatContextMenu.canDownload(message, withTarget, noForwards, container));
     }
 
     if(!canSaveMessageMedia(message) || noForwards) {
       return false;
     }
 
-    const isPhoto: boolean = !!((message as Message.message).media as MessageMedia.messageMediaPhoto)?.photo;
+    const photo = ((message as Message.message).media as MessageMedia.messageMediaPhoto)?.photo as Photo.photo;
+    const document = ((message as Message.message).media as MessageMedia.messageMediaDocument)?.document as Document.document;
+    const isPhoto: boolean = !!photo;
     let isGoodType = false
 
     if(isPhoto) {
       isGoodType = true;
     } else {
-      const doc: MyDocument = ((message as Message.message).media as MessageMedia.messageMediaDocument)?.document as any;
-      if(!doc) return false;
+      if(!document) {
+        return false;
+      }
+
       // isGoodType = doc.type && (['gif', 'video', 'audio', 'voice', 'sticker'] as MyDocument['type'][]).includes(doc.type)
       isGoodType = true;
     }
@@ -955,6 +1096,11 @@ export default class ChatContextMenu {
         findUpClassName(withTarget, 'media-sticker-wrapper') ||
         findUpClassName(withTarget, 'media-photo') ||
         findUpClassName(withTarget, 'media-video'));
+    }
+
+    if(container && (message as Message.message).restriction_reason && isSensitive((message as Message.message).restriction_reason)) {
+      const item = container.querySelector(`[data-mid="${message.mid}"]`);
+      return item && !hasSensitiveSpoiler(item as HTMLElement);
     }
 
     return isGoodType && hasTarget;
@@ -1229,6 +1375,7 @@ export default class ChatContextMenu {
     }
 
     this.chat.container.append(element);
+    this.buttons.forEach((button) => button.onOpen?.());
 
     return {
       element,
@@ -1238,6 +1385,7 @@ export default class ChatContextMenu {
       },
       destroy: () => {
         element.remove();
+        this.buttons.forEach((button) => button.onClose?.());
         reactionsMenu && reactionsMenu.widthContainer.remove();
       },
       menuPadding,
@@ -1375,6 +1523,14 @@ export default class ChatContextMenu {
 
   private onEditClick = () => {
     const message = this.getMessageWithText();
+    if(message._ === 'message' && message.media?._ === 'messageMediaToDo') {
+      PopupElement.createPopup(PopupChecklist, {
+        chat: this.chat,
+        editMessage: message as any
+      }).show();
+      return;
+    }
+
     this.chat.input.initMessageEditing(this.isTargetAGroupedItem ? this.mid : message.mid);
   };
 
@@ -1470,6 +1626,19 @@ export default class ChatContextMenu {
 
   private onStopPoll = () => {
     this.managers.appPollsManager.stopPoll(this.message as Message.message);
+  };
+
+  private onAddTaskClick = async() => {
+    if(!rootScope.premium) {
+      PopupPremium.show();
+      return;
+    }
+
+    PopupElement.createPopup(PopupChecklist, {
+      chat: this.chat,
+      editMessage: this.message as any,
+      appending: true
+    }).show();
   };
 
   private onForwardClick = async() => {
@@ -1577,14 +1746,14 @@ export default class ChatContextMenu {
     this.managers.appMessagesManager.confirmRepayRequest(this.message.repayRequest.id, preparedPaymentResult);
   }
 
-  public static onDownloadClick(messages: MyMessage | MyMessage[], noForwards?: boolean): DownloadBlob | DownloadBlob[] {
+  public static onDownloadClick(messages: MyMessage | MyMessage[], noForwards?: boolean, container?: HTMLElement): DownloadBlob | DownloadBlob[] {
     if(Array.isArray(messages)) {
       return messages.map((message) => {
-        return this.onDownloadClick(message) as any;
+        return this.onDownloadClick(message, noForwards, container) as any;
       });
     }
 
-    if(!this.canDownload(messages, undefined, noForwards)) {
+    if(!this.canDownload(messages, undefined, noForwards, container)) {
       return;
     }
 

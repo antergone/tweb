@@ -4,7 +4,7 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import type {AppMessagesManager, MyInputMessagesFilter, MyMessage} from '../lib/appManagers/appMessagesManager';
+import type {AppMessagesManager, MyInputMessagesFilter, MyMessage, RequestHistoryOptions} from '../lib/appManagers/appMessagesManager';
 import appDialogsManager, {DIALOG_LIST_ELEMENT_TAG, DialogDom, Some4} from '../lib/appManagers/appDialogsManager';
 import {logger} from '../lib/logger';
 import rootScope from '../lib/rootScope';
@@ -72,7 +72,7 @@ import wrapDocument from './wrappers/document';
 import wrapPhoto from './wrappers/photo';
 import wrapVideo from './wrappers/video';
 import noop from '../helpers/noop';
-import wrapMediaSpoiler, {onMediaSpoilerClick} from './wrappers/mediaSpoiler';
+import wrapMediaSpoiler, {hasSensitiveSpoiler, onMediaSpoilerClick} from './wrappers/mediaSpoiler';
 import filterAsync from '../helpers/array/filterAsync';
 import ChatContextMenu, {getSponsoredMessageButtons} from './chat/contextMenu';
 import PopupElement from './popups';
@@ -100,6 +100,11 @@ import Icon from './icon';
 import PopupReportAd from './popups/reportAd';
 import createContextMenu from '../helpers/dom/createContextMenu';
 import ButtonMenuToggle from './buttonMenuToggle';
+import EmptySearchPlaceholder from './emptySearchPlaceholder';
+import {SensitiveContentSettings} from '../lib/appManagers/appPrivacyManager';
+import {ignoreRestrictionReasons, isSensitive} from '../helpers/restrictions';
+import {isMessageSensitive} from '../lib/appManagers/utils/messages/isMessageRestricted';
+import {MediaSearchContext} from './appMediaPlaybackController';
 
 // const testScroll = false;
 
@@ -115,7 +120,7 @@ export type SearchSuperContext = {
   nextRate?: number,
   minDate?: number,
   maxDate?: number
-};
+} & Pick<RequestHistoryOptions, 'chatType'>;
 
 export type SearchSuperMediaType = 'stories' | 'members' | 'media' |
   'files' | 'links' | 'music' | 'chats' | 'voice' | 'groups' | 'similar' |
@@ -244,13 +249,13 @@ class SearchContextMenu {
     }, {
       icon: 'download',
       text: 'MediaViewer.Context.Download',
-      onClick: () => ChatContextMenu.onDownloadClick(this.message, this.noForwards),
-      verify: () => !this.searchSuper.selection.isSelecting && ChatContextMenu.canDownload(this.message, undefined, this.noForwards)
+      onClick: () => ChatContextMenu.onDownloadClick(this.message, this.noForwards, this.attachTo),
+      verify: () => !this.searchSuper.selection.isSelecting && ChatContextMenu.canDownload(this.message, undefined, this.noForwards, this.attachTo)
     }, {
       icon: 'download',
       text: 'Message.Context.Selection.Download',
-      onClick: () => ChatContextMenu.onDownloadClick(this.selectedMessages, this.noForwards),
-      verify: () => this.searchSuper.selection.isSelecting && ChatContextMenu.canDownload(this.selectedMessages, undefined, this.noForwards),
+      onClick: () => ChatContextMenu.onDownloadClick(this.selectedMessages, this.noForwards, this.attachTo),
+      verify: () => this.searchSuper.selection.isSelecting && ChatContextMenu.canDownload(this.selectedMessages, undefined, this.noForwards, this.attachTo),
       withSelection: true
     }, {
       icon: 'message',
@@ -358,11 +363,11 @@ class SearchContextMenu {
   };
 
   private onStoryTogglePinClick = (pin: boolean) => {
-    this.searchSuper.selection.onPinClick([this.storyItem.id], pin);
+    this.searchSuper.selection.onPinStoriesClick([this.storyItem.id], pin);
   };
 
   private onStoryToggleToTopClick = (pin: boolean) => {
-    this.searchSuper.selection.onPinToTopClick([this.storyItem.id], pin);
+    this.searchSuper.selection.onPinStoriesToTopClick([this.storyItem.id], pin);
   };
 }
 
@@ -406,6 +411,9 @@ export default class AppSearchSuper {
 
   private log = logger('SEARCH-SUPER');
   public selectTab: ReturnType<typeof horizontalMenu>;
+
+  private sensitiveContentSettings: SensitiveContentSettings;
+  private isChatSensitive: boolean;
 
   private monthContainers: Partial<{
     [type in SearchSuperType]: {
@@ -709,29 +717,35 @@ export default class AppSearchSuper {
       if(mediaSpoiler) {
         onMediaSpoilerClick({
           event: e,
-          mediaSpoiler
+          mediaSpoiler,
+          sensitiveSettings: this.sensitiveContentSettings
         })
         return;
       }
 
       const peerId = target.dataset.peerId.toPeerId();
+      const message = await this.managers.appMessagesManager.getMessageByPeer(peerId, mid);
+      const skipSensitive = !this.isChatSensitive && !isMessageSensitive(message);
 
       const targets = (Array.from(this.tabs[inputFilter].querySelectorAll('.' + targetClassName)) as HTMLElement[]).map((el) => {
         const containerEl = findUpClassName(el, className);
+        if(skipSensitive && hasSensitiveSpoiler(containerEl)) {
+          return;
+        }
+
         return {
           element: el,
           mid: +containerEl.dataset.mid,
           peerId: containerEl.dataset.peerId.toPeerId()
         };
-      });
+      }).filter(Boolean);
 
       // const ids = Object.keys(this.mediaDivsByIds).map((k) => +k).sort((a, b) => a - b);
       const idx = targets.findIndex((item) => item.mid === mid && item.peerId === peerId);
 
       const mediaTab = this.mediaTabs.find((mediaTab) => mediaTab.inputFilter === inputFilter);
-      const message = await this.managers.appMessagesManager.getMessageByPeer(peerId, mid);
       new AppMediaViewer()
-      .setSearchContext(this.copySearchContext(inputFilter, this.nextRates[mediaTab.type]))
+      .setSearchContext(this.copySearchContext(inputFilter, this.nextRates[mediaTab.type], skipSensitive))
       .openMedia({
         message,
         target: targets[idx].element,
@@ -772,6 +786,10 @@ export default class AppSearchSuper {
     }, () => {
       this.lazyLoadQueue.unlockAndRefresh(); // ! maybe not so efficient
     }, this.listenerSetter);
+
+    this.listenerSetter.add(rootScope)('sensitive_content_settings', (sensitiveContentSettings) => {
+      this.sensitiveContentSettings = sensitiveContentSettings;
+    });
   }
 
   private scrollToStart() {
@@ -813,6 +831,7 @@ export default class AppSearchSuper {
 
     const loadPromises: Promise<any>[] = [];
     const dialogElement = appDialogsManager.addDialogNew({
+      dontSetActive: true,
       peerId,
       container: searchGroup?.list || false,
       avatarSize: 'bigger',
@@ -885,11 +904,14 @@ export default class AppSearchSuper {
       });
     }
 
-    if((message.media as MessageMedia.messageMediaPhoto).pFlags.spoiler) {
+    const sensitive = this.isChatSensitive || isMessageSensitive(message);
+
+    if((message.media as MessageMedia.messageMediaPhoto).pFlags.spoiler || sensitive) {
       const mediaSpoiler = await wrapMediaSpoiler({
         animationGroup: 'chat',
         media,
         middleware,
+        sensitive,
         width: 140,
         height: 140,
         multiply: 0.3
@@ -920,7 +942,7 @@ export default class AppSearchSuper {
       fontWeight: 400,
       voiceAsMusic: true,
       showSender,
-      searchContext: this.copySearchContext(inputFilter, this.nextRates.files),
+      searchContext: this.copySearchContext(inputFilter, this.nextRates.files, false),
       lazyLoadQueue: this.lazyLoadQueue,
       autoDownloadSize: 0,
       getSize: () => 320
@@ -1143,8 +1165,11 @@ export default class AppSearchSuper {
       elemsToAppend.push(...awaited);
     }
 
-    if(searchGroup && searchGroup.list.childElementCount) {
+    const showSearchGroupAnyway = mediaTab.type === 'chats' && searchGroup.createPlaceholder;
+    if(searchGroup && (searchGroup.list.childElementCount || showSearchGroupAnyway)) {
       searchGroup.setActive();
+
+      if(!searchGroup.list?.childElementCount && searchGroup.createPlaceholder) searchGroup.addPlaceholder(searchGroup.createPlaceholder());
     }
 
     if(this.loadMutex) {
@@ -1160,6 +1185,7 @@ export default class AppSearchSuper {
     }
 
     const length = elemsToAppend.length;
+
     if(length) {
       const method = append ? 'append' : 'prepend';
       const groupByMonth = this.groupByMonth && !isSaved;
@@ -2258,7 +2284,9 @@ export default class AppSearchSuper {
       canViewGroups,
       canViewStories,
       canViewSimilar,
-      giftsCount
+      giftsCount,
+      sensitiveContentSettings,
+      chatRestrictions
     ] = await Promise.all([
       this.managers.appMessagesManager.getSearchCounters(peerId, filters, undefined, threadId),
       this.canViewSavedDialogs(),
@@ -2267,12 +2295,18 @@ export default class AppSearchSuper {
       this.canViewGroups(),
       this.canViewStories(),
       this.canViewSimilar(),
-      this.getGiftsCount()
+      this.getGiftsCount(),
+      this.managers.appPrivacyManager.getSensitiveContentSettings(),
+      this.managers.appPeersManager.getPeerRestrictions(peerId)
     ]);
 
     if(!middleware()) {
       return;
     }
+
+    this.sensitiveContentSettings = sensitiveContentSettings;
+    ignoreRestrictionReasons(this.sensitiveContentSettings.ignoreRestrictionReasons);
+    this.isChatSensitive = isSensitive(chatRestrictions);
 
     if(this.loadMutex) {
       await this.loadMutex;
@@ -2654,14 +2688,15 @@ export default class AppSearchSuper {
     } */
   }
 
-  private copySearchContext(newInputFilter: MyInputMessagesFilter, nextRate: number) {
-    const context = copy(this.searchContext);
+  private copySearchContext(newInputFilter: MyInputMessagesFilter, nextRate: number, skipSensitive: boolean) {
+    const context = copy(this.searchContext) as MediaSearchContext;
     context.inputFilter = {_: newInputFilter};
     context.nextRate = nextRate;
+    context.skipSensitive = skipSensitive;
     return context;
   }
 
-  public setQuery({peerId, query, threadId, historyStorage, folderId, minDate, maxDate}: {
+  public setQuery({peerId, query, threadId, historyStorage, folderId, minDate, maxDate, chatType}: {
     peerId: PeerId,
     query?: string,
     threadId?: number,
@@ -2669,7 +2704,7 @@ export default class AppSearchSuper {
     folderId?: number,
     minDate?: number,
     maxDate?: number
-  }) {
+  } & Pick<RequestHistoryOptions, 'chatType'>) {
     this.searchContext = {
       peerId,
       query: query || '',
@@ -2677,7 +2712,8 @@ export default class AppSearchSuper {
       threadId,
       folderId,
       minDate,
-      maxDate
+      maxDate,
+      chatType
     };
 
     this.historyStorage = historyStorage ?? {};

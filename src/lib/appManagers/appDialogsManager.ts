@@ -12,7 +12,7 @@ import type {AnyDialog} from '../storages/dialogs';
 import type {CustomEmojiRendererElement} from '../customEmoji/renderer';
 import PopupElement from '../../components/popups';
 import DialogsContextMenu from '../../components/dialogsContextMenu';
-import {horizontalMenu} from '../../components/horizontalMenu';
+import {horizontalMenu, horizontalMenuObjArgs} from '../../components/horizontalMenu';
 import ripple from '../../components/ripple';
 import Scrollable, {ScrollableX, SliceSides} from '../../components/scrollable';
 import {formatDateAccordingToTodayNew} from '../../helpers/date';
@@ -47,7 +47,7 @@ import SortedList, {SortedElementBase} from '../../helpers/sortedList';
 import debounce from '../../helpers/schedulers/debounce';
 import {CAN_HIDE_TOPIC, FOLDER_ID_ALL, FOLDER_ID_ARCHIVE, NULL_PEER_ID, REAL_FOLDERS} from '../mtproto/mtproto_config';
 import groupCallActiveIcon from '../../components/groupCallActiveIcon';
-import {Chat, ChatlistsChatlistUpdates, DialogFilter, Message, MessageReplyHeader} from '../../layer';
+import {Chat, ChatlistsChatlistUpdates, DialogFilter, Message, MessageMedia, MessageReplyHeader} from '../../layer';
 import IS_GROUP_CALL_SUPPORTED from '../../environment/groupCallSupport';
 import mediaSizes from '../../helpers/mediaSizes';
 import appNavigationController, {NavigationItem} from '../../components/appNavigationController';
@@ -58,7 +58,7 @@ import appSidebarRight from '../../components/sidebarRight';
 import choosePhotoSize from './utils/photos/choosePhotoSize';
 import wrapEmojiText from '../richTextProcessor/wrapEmojiText';
 import wrapMessageForReply, {WrapMessageForReplyOptions} from '../../components/wrappers/messageForReply';
-import isMessageRestricted from './utils/messages/isMessageRestricted';
+import isMessageRestricted, {isMessageSensitive} from './utils/messages/isMessageRestricted';
 import getMediaFromMessage from './utils/messages/getMediaFromMessage';
 import getMessageSenderPeerIdOrName from './utils/messages/getMessageSenderPeerIdOrName';
 import wrapStickerEmoji from '../../components/wrappers/stickerEmoji';
@@ -119,6 +119,7 @@ import SortedDialogList from '../../components/sortedDialogList';
 import throttle from '../../helpers/schedulers/throttle';
 import {MAX_SIDEBAR_WIDTH} from '../../components/sidebarLeft/constants';
 import {unwrap} from 'solid-js/store';
+import wrapMediaSpoiler from '../../components/wrappers/mediaSpoiler';
 
 export const DIALOG_LIST_ELEMENT_TAG = 'A';
 const DIALOG_LOAD_COUNT = 10;
@@ -167,6 +168,10 @@ function setPromiseMiddleware<T extends {[smth in K as K]?: CancellablePromise<v
   return {deferred, middleware};
 }
 
+function getFolderTitleTextColor(active: boolean) {
+  return active ? 'primary-color' : 'secondary-text-color';
+}
+
 const BADGE_SIZE = 22;
 const BADGE_TRANSITION_TIME = 250;
 
@@ -192,7 +197,8 @@ type DialogElementOptions = {
   wrapOptions: WrapSomethingOptions,
   isMainList?: boolean,
   withStories?: boolean,
-  controlled?: boolean
+  controlled?: boolean,
+  dontSetActive?: boolean
 };
 export class DialogElement extends Row {
   private static BADGE_ORDER: Parameters<DialogElement['toggleBadgeByKey']>[0][] = ['reactionsBadge', 'mentionsBadge', 'unreadBadge', 'pinnedBadge'];
@@ -213,7 +219,8 @@ export class DialogElement extends Row {
     wrapOptions = {},
     isMainList,
     withStories,
-    controlled
+    controlled,
+    dontSetActive
   }: DialogElementOptions) {
     super({
       clickable: true,
@@ -271,7 +278,7 @@ export class DialogElement extends Row {
 
     this.titleRow.classList.add('dialog-title');
 
-    const isActive = !autonomous &&
+    const isActive = !dontSetActive && !autonomous &&
       appImManager.chat &&
       appImManager.isSamePeer(appImManager.chat, {peerId, threadId: threadId, type: isSavedDialog ? ChatType.Saved : ChatType.Chat});
 
@@ -445,7 +452,7 @@ class ForumTab extends SliderSuperTabEventable {
 
   private log: ReturnType<typeof logger>;
 
-  private xd: Some3;
+  public xd: Some3;
 
   public async toggle(value: boolean) {
     if(this.init2) {
@@ -779,7 +786,7 @@ class Some<T extends AnyDialog = AnyDialog> {
     const last = sortedItems[sortedItems.length - 1];
 
     const bottomIndex = last?.index;
-    const dialogIndex = getDialogIndex(dialog);
+    const dialogIndex = getDialogIndex(dialog, this.indexKey);
 
     return !last || dialogIndex >= bottomIndex || this.hasReachedTheEnd;
   }
@@ -924,11 +931,11 @@ class Some<T extends AnyDialog = AnyDialog> {
     }
 
     const newOffsetIndex = result.dialogs.reduce((prev, curr) => {
-      const index = getDialogIndex(curr, this.indexKey)
+      const index = getDialogIndex(curr, this.indexKey);
       return index < prev ? index : prev;
     }, offsetIndex || Infinity);
 
-    const items = await Promise.all(result.dialogs.map(async dialog => {
+    const items = await Promise.all(result.dialogs.map(async(dialog) => {
       const key = this.getDialogKey(dialog as T);
 
       return this.sortedList.createItemForKey(key);
@@ -1491,7 +1498,7 @@ export class Some4 extends Some<SavedDialog> {
       for(const [peerId, {saved}] of dialogs) {
         saved?.forEach((dialog) => {
           hasAnyUpdate = true;
-          this.updateDialog(dialog);
+          this.updateDialog(dialog as SavedDialog);
         });
       }
 
@@ -1706,61 +1713,71 @@ export class AppDialogsManager {
 
     const foldersScrollable = new ScrollableX(this.folders.menuScrollContainer);
     bottomPart.prepend(this.folders.menuScrollContainer);
-    const selectTab = this.selectTab = horizontalMenu(this.folders.menu, this.folders.container, async(id, tabContent) => {
-      /* if(id !== 0) {
-        id += 1;
-      } */
+    const selectTab = this.selectTab = horizontalMenuObjArgs({
+      tabs: this.folders.menu,
+      content: this.folders.container,
+      onClick: async(id, tabContent) => {
+        /* if(id !== 0) {
+          id += 1;
+        } */
 
-      const _id = id;
-      id = +tabContent.dataset.filterId || FOLDER_ID_ALL;
+        const _id = id;
+        id = +tabContent.dataset.filterId || FOLDER_ID_ALL;
 
-      rootScope.dispatchEventSingle('changing_folder_from_chatlist', id);
+        rootScope.dispatchEventSingle('changing_folder_from_chatlist', id);
 
-      const isFilterAvailable = this.filterId === -1 || REAL_FOLDERS.has(id) || await this.managers.filtersStorage.isFilterIdAvailable(id);
-      if(!isFilterAvailable) {
-        showLimitPopup('folders');
-        return false;
-      }
+        const isFilterAvailable = this.filterId === -1 || REAL_FOLDERS.has(id) || await this.managers.filtersStorage.isFilterIdAvailable(id);
+        if(!isFilterAvailable) {
+          showLimitPopup('folders');
+          return false;
+        }
 
-      const wasFilterId = this.filterId;
-      if(!IS_MOBILE_SAFARI) {
-        if(_id) {
-          if(!this.filtersNavigationItem) {
-            this.filtersNavigationItem = {
-              type: 'filters',
-              onPop: () => {
-                selectTab(0);
-                this.filtersNavigationItem = undefined;
-              }
-            };
+        const wasFilterId = this.filterId;
+        if(!IS_MOBILE_SAFARI) {
+          if(_id) {
+            if(!this.filtersNavigationItem) {
+              this.filtersNavigationItem = {
+                type: 'filters',
+                onPop: () => {
+                  selectTab(0);
+                  this.filtersNavigationItem = undefined;
+                }
+              };
 
-            appNavigationController.spliceItems(1, 0, this.filtersNavigationItem);
+              appNavigationController.spliceItems(1, 0, this.filtersNavigationItem);
+            }
+          } else if(this.filtersNavigationItem) {
+            appNavigationController.removeItem(this.filtersNavigationItem);
+            this.filtersNavigationItem = undefined;
           }
-        } else if(this.filtersNavigationItem) {
-          appNavigationController.removeItem(this.filtersNavigationItem);
-          this.filtersNavigationItem = undefined;
         }
-      }
 
-      if(wasFilterId === id) return;
+        if(wasFilterId === id) return;
 
-      this.xds[id].clear();
-      const promise = this.setFilterIdAndChangeTab(id).then(() => {
-        // if(cached) {
-        //   return renderPromise;
-        // }
-      });
+        this.xds[id].clear();
+        const promise = this.setFilterIdAndChangeTab(id).then(() => {
+          // if(cached) {
+          //   return renderPromise;
+          // }
+        });
 
-      if(wasFilterId !== -1) {
-        return promise;
-      }
-    }, () => {
-      for(const folderId in this.xds) {
-        if(+folderId !== this.filterId) {
-          this.xds[folderId].clear();
+        if(wasFilterId !== -1) {
+          return promise;
         }
+      },
+      onTransitionEnd: () => {
+        for(const folderId in this.xds) {
+          if(+folderId !== this.filterId) {
+            this.xds[folderId].clear();
+          }
+        }
+      },
+      scrollableX: foldersScrollable,
+      onChange: ({element, active}) => {
+        const renderer: CustomEmojiRendererElement = element?.querySelector('custom-emoji-renderer-element');
+        renderer?.setTextColor(getFolderTitleTextColor(active));
       }
-    }, undefined, foldersScrollable);
+    });
 
     createFolderContextMenu({
       appSidebarLeft,
@@ -1897,11 +1914,13 @@ export class AppDialogsManager {
         }
       }
 
-      const elements = Array.from(document.querySelectorAll(`[data-autonomous="0"] .chatlist-chat[data-peer-id="${peerId}"]`)) as HTMLElement[];
-      elements.forEach((element) => {
-        const elementThreadId = +element.dataset.threadId || undefined;
+      const elements = [this.xd?.sortedList?.get?.(peerId), this.forumTab?.xd?.sortedList?.get(threadId)].filter(Boolean);
+
+      elements.forEach(element => {
+        if(!element?.dom?.listEl) return;
+        const elementThreadId = +element?.dom?.listEl?.dataset?.threadId || undefined;
         if(appImManager.isSamePeer({peerId, threadId: elementThreadId}, options)) {
-          this.setDialogActive(element, true);
+          this.setDialogActive(element.dom?.listEl, true);
         }
       });
       // this.log('peer_changed total time:', performance.now() - perf);
@@ -1918,7 +1937,8 @@ export class AppDialogsManager {
       }
 
       const elements = this.filtersRendered[filter.id];
-      setInnerHTML(elements.title, await wrapFolderTitle(filter.title, elements.middlewareHelper.get()));
+      const active = this.filterId === filter.id;
+      setInnerHTML(elements.title, await wrapFolderTitle(filter.title, elements.middlewareHelper.get(), false, {textColor: getFolderTitleTextColor(active)}));
     });
 
     rootScope.addEventListener('filter_delete', (filter) => {
@@ -2295,7 +2315,7 @@ export class AppDialogsManager {
     const titleSpan = document.createElement('span');
     titleSpan.classList.add('text-super');
     if(id === FOLDER_ID_ALL) titleSpan.append(this.allChatsIntlElement.element);
-    else setInnerHTML(titleSpan, wrapFolderTitle(filter.title, middlewareHelper.get(), true));
+    else setInnerHTML(titleSpan, wrapFolderTitle(filter.title, middlewareHelper.get(), true, {textColor: 'secondary-text-color'}));
     const unreadSpan = createBadge('div', 20, 'primary');
     const i = document.createElement('i');
     span.append(titleSpan, unreadSpan, i);
@@ -3029,6 +3049,7 @@ export class AppDialogsManager {
     }
 
     const isRestricted = !!lastMessage && isMessageRestricted(lastMessage as Message.message);
+    const isSensitive = !!lastMessage && isMessageSensitive(lastMessage as Message.message);
 
     /* if(!dom.lastMessageSpan.classList.contains('user-typing')) */ {
       let mediaContainer: HTMLElement;
@@ -3051,6 +3072,7 @@ export class AppDialogsManager {
         const media = getMediaFromMessage(lastMessage, true);
         const videoTypes: Set<MyDocument['type']> = new Set(['video', 'gif', 'round']);
         if(media && (media._ === 'photo' || videoTypes.has(media.type))) {
+          const spoiler = ((lastMessage as Message.message).media as MessageMedia.messageMediaPhoto | MessageMedia.messageMediaDocument)?.pFlags?.spoiler;
           const size = choosePhotoSize(media, 20, 20);
 
           if(size._ !== 'photoSizeEmpty') {
@@ -3067,7 +3089,23 @@ export class AppDialogsManager {
               container: mediaContainer,
               withoutPreloader: true,
               size
-            }).then(() => mediaContainer));
+            }).then(() => {
+              if(spoiler || isSensitive) {
+                return wrapMediaSpoiler({
+                  media: media,
+                  width: 20,
+                  height: 20,
+                  multiply: 0.1,
+                  middleware: this.stateMiddlewareHelper.get(),
+                  animationGroup: 'none'
+                }).then((el) => {
+                  mediaContainer.append(el);
+                  return mediaContainer;
+                });
+              }
+
+              return mediaContainer
+            }));
 
             if(videoTypes.has((media as MyDocument).type)) {
               const playIcon = Icon('play', 'dialog-subtitle-media-play');

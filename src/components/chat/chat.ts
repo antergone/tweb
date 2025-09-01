@@ -68,6 +68,9 @@ import showUndoablePaidTooltip, {paidReactionLangKeys} from './undoablePaidToolt
 import namedPromises from '../../helpers/namedPromises';
 import {getCurrentNewMediaPopup} from '../popups/newMedia';
 import PriceChangedInterceptor from './priceChangedInterceptor';
+import {isMessageForVerificationBot, isVerificationBot} from './utils';
+import {SensitiveContentSettings} from '../../lib/appManagers/appPrivacyManager';
+import {ignoreRestrictionReasons, isRestricted, isSensitive} from '../../helpers/restrictions';
 
 export enum ChatType {
   Chat = 'chat',
@@ -125,6 +128,7 @@ export default class Chat extends EventListenerBase<{
   public inited: boolean;
 
   public isRestricted: boolean;
+  public isSensitive: boolean;
   public autoDownload: ChatAutoDownloadSettings;
 
   public gradientRenderer: ChatBackgroundGradientRenderer;
@@ -166,6 +170,8 @@ export default class Chat extends EventListenerBase<{
   public ignoreSearchCleaning: boolean;
 
   public stars: Accessor<Long>;
+
+  public sensitiveContentSettings: SensitiveContentSettings;
 
   // public requestHistoryOptionsPart: RequestHistoryOptions;
 
@@ -654,6 +660,14 @@ export default class Chat extends EventListenerBase<{
       }
     });
 
+    this.bubbles.listenerSetter.add(rootScope)('sensitive_content_settings', (settings) => {
+      this.sensitiveContentSettings = settings;
+      ignoreRestrictionReasons(settings.ignoreRestrictionReasons);
+      if(settings.ignoreRestrictionReasons.includes('sensitive')) {
+        this.isSensitive = false;
+      }
+    });
+
 
     const freezeObservers = (freeze: boolean) => {
       const cb = () => {
@@ -850,6 +864,7 @@ export default class Chat extends EventListenerBase<{
 
     const [
       noForwards,
+      restrictions,
       isRestricted,
       isLikeGroup,
       isRealGroup,
@@ -861,9 +876,11 @@ export default class Chat extends EventListenerBase<{
       isAnonymousSending,
       isUserBlocked,
       isPremiumRequired,
-      starsAmount
+      starsAmount,
+      sensitiveContentSettings
     ] = await m(Promise.all([
       this.managers.appPeersManager.noForwards(peerId),
+      this.managers.appPeersManager.getPeerRestrictions(peerId),
       this.managers.appPeersManager.isPeerRestricted(peerId),
       this._isLikeGroup(peerId),
       this.managers.appPeersManager.isAnyGroup(peerId),
@@ -875,7 +892,8 @@ export default class Chat extends EventListenerBase<{
       this.managers.appMessagesManager.isAnonymousSending(peerId),
       peerId.isUser() && this.managers.appProfileManager.isCachedUserBlocked(peerId),
       this.isPremiumRequiredToContact(peerId),
-      this.managers.appPeersManager.getStarsAmount(peerId)
+      this.managers.appPeersManager.getStarsAmount(peerId),
+      this.sensitiveContentSettings || this.managers.appPrivacyManager.getSensitiveContentSettings()
     ]));
 
     // ! WARNING: TEMPORARY, HAVE TO GET TOPIC
@@ -884,7 +902,6 @@ export default class Chat extends EventListenerBase<{
     }
 
     this.noForwards = noForwards;
-    this.isRestricted = isRestricted;
     this.isLikeGroup = isLikeGroup;
     this.isAnyGroup = isRealGroup;
     this.isMegagroup = isMegagroup;
@@ -897,6 +914,11 @@ export default class Chat extends EventListenerBase<{
     this.isUserBlocked = isUserBlocked;
     this.isPremiumRequired = isPremiumRequired;
     this.starsAmount = starsAmount;
+
+    this.isRestricted = isRestricted;
+    this.sensitiveContentSettings = sensitiveContentSettings;
+    ignoreRestrictionReasons(this.sensitiveContentSettings.ignoreRestrictionReasons);
+    this.isSensitive = isSensitive(restrictions);
 
     if(this.selection) {
       this.selection.isScheduled = type === ChatType.Scheduled;
@@ -1154,6 +1176,11 @@ export default class Chat extends EventListenerBase<{
     });
   }
 
+  public async hasMessages() {
+    const {history} = await this.getHistoryStorage(true);
+    return !!history.length;
+  }
+
   public getDialogOrTopic() {
     return this.managers.dialogsStorage.getAnyDialog(this.peerId, (this.isForum || this.type === ChatType.Saved) && this.threadId);
   }
@@ -1181,6 +1208,7 @@ export default class Chat extends EventListenerBase<{
   }
 
   public canSend(action?: ChatRights) {
+    if(isVerificationBot(this.peerId)) return Promise.resolve(false);
     if(this.type === ChatType.Saved && this.threadId !== this.peerId) {
       return Promise.resolve(false);
     }
@@ -1195,7 +1223,7 @@ export default class Chat extends EventListenerBase<{
       this.getHistoryStorage(true),
       this.peerId.isUser() ? this.managers.appProfileManager.isCachedUserBlocked(this.peerId.toUserId()) : undefined
     ]).then(([isBot, dialog, historyStorage, isUserBlocked]) => {
-      if(!isBot) {
+      if(!isBot || isVerificationBot(this.peerId)) {
         return false;
       }
 
@@ -1253,6 +1281,7 @@ export default class Chat extends EventListenerBase<{
   }
 
   public isAvatarNeeded(message: Message.message | Message.messageService) {
+    if(isMessageForVerificationBot(message)) return true;
     return this.isLikeGroup && !this.isOutMessage(message);
   }
 
