@@ -1,15 +1,9 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {logger, LogTypes} from '../lib/logger';
-import insertInDescendSortedArray from './array/insertInDescendSortedArray';
-import {getMiddleware, Middleware, MiddlewareHelper} from './middleware';
-import middlewarePromise from './middlewarePromise';
-import safeAssign from './object/safeAssign';
-import pause from './schedulers/pause';
+import {logger, LogTypes} from '@lib/logger';
+import insertInDescendSortedArray from '@helpers/array/insertInDescendSortedArray';
+import {getMiddleware, Middleware, MiddlewareHelper} from '@helpers/middleware';
+import middlewarePromise from '@helpers/middlewarePromise';
+import safeAssign from '@helpers/object/safeAssign';
+import pause from '@helpers/schedulers/pause';
 
 export type SortedElementBase<T = any> = {
   id: T,

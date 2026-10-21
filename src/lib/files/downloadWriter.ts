@@ -1,12 +1,6 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import appManagersManager from '../appManagers/appManagersManager';
-import ServiceMessagePort from '../serviceWorker/serviceMessagePort';
-import StreamWriter from './streamWriter';
+import appManagersManager from '@appManagers/appManagersManager';
+import ServiceMessagePort from '@lib/serviceWorker/serviceMessagePort';
+import StreamWriter from '@lib/files/streamWriter';
 
 export default class DownloadWriter implements StreamWriter {
   constructor(

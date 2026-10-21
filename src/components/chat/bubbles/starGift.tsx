@@ -1,29 +1,33 @@
 import {createMemo} from 'solid-js';
-import {StarGift, TextWithEntities} from '../../../layer';
-import wrapRichText from '../../../lib/richTextProcessor/wrapRichText';
-import {AvatarNewTsx} from '../../avatarNew';
-import Button from '../../buttonTsx';
-import {StickerTsx, StickerTsxExtraOptions} from '../../wrappers/sticker';
-import {PeerTitleTsx} from '../../peerTitleTsx';
+import {StarGift, TextWithEntities} from '@layer';
+import wrapRichText from '@lib/richTextProcessor/wrapRichText';
+import {AvatarNewTsx} from '@components/avatarNew';
+import Button from '@components/buttonTsx';
+import {StickerTsx, StickerTsxExtraOptions} from '@components/wrappers/sticker';
+import {PeerTitleTsx} from '@components/peerTitleTsx';
 
-import styles from './starGift.module.scss';
-import stylesCommon from './service.module.scss';
-import {Sparkles} from '../../sparkles';
-import classNames from '../../../helpers/string/classNames';
-import {I18nTsx} from '../../../helpers/solid/i18n';
-import {MyStarGift} from '../../../lib/appManagers/appGiftsManager';
-import {StarGiftBadge} from '../../stargifts/stargiftBadge';
-import {StarGiftBackdrop} from '../../stargifts/stargiftBackdrop';
-import {MyDocument} from '../../../lib/appManagers/appDocsManager';
-import numberThousandSplitter from '../../../helpers/number/numberThousandSplitter';
-import {simulateClickEvent} from '../../../helpers/dom/clickEvent';
-import formatNumber from '../../../helpers/number/formatNumber';
+import styles from '@components/chat/bubbles/starGift.module.scss';
+import stylesCommon from '@components/chat/bubbles/service.module.scss';
+import {Sparkles} from '@components/sparkles';
+import classNames from '@helpers/string/classNames';
+import {I18nTsx} from '@helpers/solid/i18n';
+import {MyStarGift} from '@appManagers/appGiftsManager';
+import {StarGiftBadge} from '@components/stargifts/stargiftBadge';
+import {StarGiftBackdrop} from '@components/stargifts/stargiftBackdrop';
+import {MyDocument} from '@appManagers/appDocsManager';
+import {simulateClickEvent} from '@helpers/dom/clickEvent';
+import formatNumber from '@helpers/number/formatNumber';
+import {getCollectibleName} from '@appManagers/utils/gifts/getCollectibleName';
+import buttonKeyDown from '@helpers/solid/buttonKeyDown';
+import Modes from '@config/modes';
+import I18n from '@lib/langPack';
 
 export function StarGiftBubble(props: {
   gift: MyStarGift
 
   fromId: PeerId
   asUpgrade?: boolean;
+  asPrepaidUpgrade?: boolean;
   ownerId?: PeerId;
   message?: TextWithEntities;
   wrapStickerOptions?: StickerTsxExtraOptions;
@@ -34,7 +38,7 @@ export function StarGiftBubble(props: {
       return (
         <div class={/* @once */ styles.uniqueGiftInfo}>
           <div class={/* @once */ styles.uniqueGiftTitle}>
-            {props.gift.raw.title} #{numberThousandSplitter(props.gift.raw.num, ',')}
+            {getCollectibleName(props.gift.raw)}
           </div>
 
           <div class={/* @once */ styles.uniqueGiftProps}>
@@ -82,8 +86,8 @@ export function StarGiftBubble(props: {
         <I18nTsx
           key="StarGiftDefaultMessageConvertableOut"
           args={[
-            <PeerTitleTsx peerId={props.ownerId} />,
-            `${props.gift.raw.convert_stars}`
+            `${props.gift.raw.convert_stars}`,
+            <PeerTitleTsx peerId={props.ownerId} />
           ]}
         />
       );
@@ -112,7 +116,7 @@ export function StarGiftBubble(props: {
         >
           <I18nTsx
             key="StarGiftLimitedBadgeNum"
-            args={[formatNumber(props.gift.raw.availability_total)]}
+            args={[formatNumber(props.gift.raw.availability_total, 1)]}
           />
         </StarGiftBadge>
       )}
@@ -132,7 +136,7 @@ export function StarGiftBubble(props: {
       />
 
       <I18nTsx
-        key="StarGiftFrom"
+        key={props.asPrepaidUpgrade ? 'StarGiftUpgradeFrom' : 'StarGiftFrom'}
         class={/* @once */ styles.from}
         args={
           <div class={/* @once */ styles.fromUser}>
@@ -150,7 +154,7 @@ export function StarGiftBubble(props: {
         <Button
           class={/* @once */ classNames('bubble-service-button', styles.upgradeButton)}
           onClick={props.onViewClick}
-          iconAfter="unpack"
+          iconAfter="unpack_filled"
         >
           <Sparkles mode="button" isDiv />
           <I18nTsx key="ActionGiftPremiumUnpack" />
@@ -175,7 +179,11 @@ export function UniqueStarGiftWebPageBox(props: {
   return (
     <div
       class={/* @once */ styles.webPageBox}
+      role="button"
+      tabindex={Modes.a11y ? 0 : undefined}
+      aria-label={/* @once */ I18n.format('ActionGiftPremiumView', true)}
       onClick={(evt) => simulateClickEvent(evt.target.closest('.webpage-quote'))}
+      onKeyDown={buttonKeyDown}
     >
       <StarGiftBackdrop
         class={/* @once */ styles.webPageBackdrop}

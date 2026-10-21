@@ -1,15 +1,9 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import ListenerSetter from '../helpers/listenerSetter';
-import debounce from '../helpers/schedulers/debounce';
-import {LangPackKey} from '../lib/langPack';
-import InputField, {InputFieldOptions, InputState} from './inputField';
-import {isUsernameValid} from '../lib/richTextProcessor/validators';
-import {AppManagers} from '../lib/appManagers/managers';
+import ListenerSetter from '@helpers/listenerSetter';
+import debounce from '@helpers/schedulers/debounce';
+import {LangPackKey} from '@lib/langPack';
+import InputField, {InputFieldOptions, InputState} from '@components/inputField';
+import {isUsernameValid} from '@lib/richTextProcessor/validators';
+import {AppManagers} from '@lib/managers';
 
 export class UsernameInputField extends InputField {
   private checkUsernamePromise: Promise<any>;
@@ -41,7 +35,7 @@ export class UsernameInputField extends InputField {
         this.setState(InputState.Neutral);
         this.options.onChange?.();
         return;
-      } else if(!isUsernameValid(value)) { // does not check the last underscore
+      } else if(!isUsernameValid(value)) {
         this.setError(this.options.invalidText);
       } else {
         this.setState(InputState.Neutral);

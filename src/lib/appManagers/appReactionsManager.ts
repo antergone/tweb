@@ -1,33 +1,32 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MessagesReactions, type AvailableReaction, type Message, type MessagePeerReaction, type MessagesAvailableReactions, type Reaction, type ReactionCount, type Update, type Updates, ChatReactions, Peer, Document, MessagesSavedReactionTags, SavedReactionTag, AvailableEffect, MessagesAvailableEffects, MessageReactions, PaidReactionPrivacy} from '../../layer';
-import findAndSplice from '../../helpers/array/findAndSplice';
-import indexOfAndSplice from '../../helpers/array/indexOfAndSplice';
-import assumeType from '../../helpers/assumeType';
-import callbackify from '../../helpers/callbackify';
-import callbackifyAll from '../../helpers/callbackifyAll';
-import copy from '../../helpers/object/copy';
-import pause from '../../helpers/schedulers/pause';
-import tsNow from '../../helpers/tsNow';
-import {ReferenceContext} from '../mtproto/referenceDatabase';
-import {AppManager} from './manager';
-import getServerMessageId from './utils/messageId/getServerMessageId';
-import reactionsEqual from './utils/reactions/reactionsEqual';
-import MTProtoMessagePort from '../mtproto/mtprotoMessagePort';
-import availableReactionToReaction from './utils/reactions/availableReactionToReaction';
-import {NULL_PEER_ID, SEND_PAID_REACTION_ANONYMOUS_PEER_ID} from '../mtproto/mtproto_config';
-import insertInDescendSortedArray from '../../helpers/array/insertInDescendSortedArray';
-import {BroadcastEvents} from '../rootScope';
+import {MessagesReactions, type AvailableReaction, type Message, type MessagePeerReaction, type MessagesAvailableReactions, type Reaction, type ReactionCount, type Update, type Updates, ChatReactions, Peer, Document, MessagesSavedReactionTags, SavedReactionTag, AvailableEffect, MessagesAvailableEffects, MessageReactions, PaidReactionPrivacy} from '@layer';
+import findAndSplice from '@helpers/array/findAndSplice';
+import indexOfAndSplice from '@helpers/array/indexOfAndSplice';
+import assumeType from '@helpers/assumeType';
+import callbackify from '@helpers/callbackify';
+import callbackifyAll from '@helpers/callbackifyAll';
+import noop from '@helpers/noop';
+import copy from '@helpers/object/copy';
+import pause from '@helpers/schedulers/pause';
+import tsNow from '@helpers/tsNow';
+import {ReferenceContext} from '@lib/storages/references';
+import {AppManager} from '@appManagers/manager';
+import getServerMessageId from '@appManagers/utils/messageId/getServerMessageId';
+import isEphemeralMessageId from '@appManagers/utils/messageId/isEphemeralMessageId';
+import reactionsEqual from '@appManagers/utils/reactions/reactionsEqual';
+import MTProtoMessagePort from '@lib/mainWorker/mainMessagePort';
+import availableReactionToReaction from '@appManagers/utils/reactions/availableReactionToReaction';
+import filterReactionsAtUniqCap, {DEFAULT_REACTIONS_UNIQ_MAX, isMessageAtUniqReactionCap} from '@appManagers/utils/reactions/filterReactionsAtUniqCap';
+import {NULL_PEER_ID, SEND_PAID_REACTION_ANONYMOUS_PEER_ID} from '@appManagers/constants';
+import insertInDescendSortedArray from '@helpers/array/insertInDescendSortedArray';
+import {BroadcastEvents} from '@lib/rootScope';
 import {md5} from 'js-md5';
-import bytesFromHex from '../../helpers/bytes/bytesFromHex';
-import {bigIntFromBytes} from '../../helpers/bigInt/bigIntConversion';
+import bytesFromHex from '@helpers/bytes/bytesFromHex';
+import {bigIntFromBytes} from '@helpers/bigInt/bigIntConversion';
 import bigInt from 'big-integer';
-import forEachReverse from '../../helpers/array/forEachReverse';
-import fixEmoji from '../richTextProcessor/fixEmoji';
+import forEachReverse from '@helpers/array/forEachReverse';
+import fixEmoji from '@lib/richTextProcessor/fixEmoji';
+import getMessageThreadId from '@appManagers/utils/messages/getMessageThreadId';
+import removeParticipantReactions from '@appManagers/utils/reactions/removeParticipantReactions';
 
 const SAVE_DOC_KEYS = [
   'static_icon' as const,
@@ -43,19 +42,28 @@ const REFERENCE_CONTEXT: ReferenceContext = {
   type: 'reactions'
 };
 
+const AVAILABLE_EFFECTS_REFERENCE_CONTEXT: ReferenceContext = {
+  type: 'availableEffects'
+};
+
 const REFRESH_TAGS_INTERVAL = 10 * 60e3;
+const DELETE_PARTICIPANT_REACTIONS_REFRESH_LIMIT = 100;
 // const REFRESH_TAGS_INTERVAL = 15e3;
 
 export type PeerAvailableReactions = {
   type: ChatReactions['_'],
   reactions: Reaction[],
-  trulyAll?: boolean
+  trulyAll?: boolean,
+  // reactions_uniq_max reached: the message already carries the max distinct reactions,
+  // so `reactions` is narrowed to the present kinds and the custom-emoji search/packs
+  // must be hidden (no new distinct reaction may be introduced).
+  atUniqCap?: boolean
 };
 
 export type SendReactionOptions = {
   message: Message.message | Message.messageService | ReactionsContext,
   reaction?: Reaction | AvailableReaction,
-  onlyLocal?: boolean,
+  // onlyLocal?: boolean,
   onlyLocalWithUpdate?: boolean,
   onlyReturn?: boolean,
   sendAsPeerId?: PeerId,
@@ -77,6 +85,12 @@ export class AppReactionsManager extends AppManager {
     this.clear(true);
 
     this.rootScope.addEventListener('user_auth', () => {
+      // * load a couple of generic animations early - they are the instant
+      // * fallback when a reaction effect isn't loaded yet
+      setTimeout(() => {
+        this.preloadGenericAnimations().catch(noop);
+      }, 2e3);
+
       setTimeout(() => {
         Promise.resolve(this.getAvailableReactions()).then(async(availableReactions) => {
           const toLoad: (Extract<keyof AvailableReaction, 'around_animation' | 'static_icon' | 'appear_animation' | 'center_icon'>)[] = [
@@ -89,7 +103,9 @@ export class AppReactionsManager extends AppManager {
           for(let i = 0, length = Math.min(7, availableReactions.length); i < length; ++i) {
             const availableReaction = availableReactions[i];
             const promises = toLoad.map((key) => {
-              return availableReaction[key] && this.apiFileManager.downloadMedia({media: availableReaction[key]});
+              // * downloadMediaURL (not downloadMedia) to mark the cache
+              // * context, so fireAroundAnimation sees the effect as loaded
+              return availableReaction[key] && this.apiFileManager.downloadMediaURL({media: availableReaction[key]}).catch(noop);
             });
             await Promise.all(promises);
             await pause(1000);
@@ -220,7 +236,9 @@ export class AppReactionsManager extends AppManager {
       quickReaction,
       topReactions
     ]) => {
-      let chatAvailableReactions = chatFull.available_reactions ?? {_: 'chatReactionsNone'};
+      let chatAvailableReactions: ChatReactions = chatFull._ === 'communityFull' ?
+        {_: 'chatReactionsNone'} :
+        chatFull.available_reactions ?? {_: 'chatReactionsNone'};
 
       let trulyAll: boolean;
       if(chatAvailableReactions._ === 'chatReactionsAll' && !chatAvailableReactions.pFlags.allow_custom) {
@@ -260,6 +278,19 @@ export class AppReactionsManager extends AppManager {
       }
 
       return p;
+    });
+  }
+
+  // Whether channel/group posts in this peer may carry a paid (star ⭐) reaction —
+  // server-driven via channelFull.paid_reactions_available. Used to render an empty
+  // paid-reaction button on posts that already have reactions but no paid one yet.
+  public isPaidReactionAvailable(peerId: PeerId): MaybePromise<boolean> {
+    if(peerId.isUser() || !this.appChatsManager.isChannel(peerId.toChatId())) {
+      return false;
+    }
+
+    return callbackify(this.appProfileManager.getChannelFull(peerId.toChatId()), (channelFull) => {
+      return !!channelFull?.pFlags?.paid_reactions_available;
     });
   }
 
@@ -367,27 +398,38 @@ export class AppReactionsManager extends AppManager {
       }
     }
 
-    return callbackify(
+    return callbackifyAll([
       this.getAvailableReactionsForPeer(peerId, unshiftQuickReaction),
-      (peerAvailableReactions) => {
-        const messageReactionsResults = message?.reactions?.results;
-        if(
-          messageReactionsResults &&
-          peerAvailableReactions.type === 'chatReactionsSome' &&
-          !peerAvailableReactions.trulyAll
-        ) {
-          peerAvailableReactions.reactions.sort((a, b) => {
-            if(a._ === 'reactionPaid') return -Infinity;
-            else if(a._ === 'reactionEmoji') return Infinity;
-            const idx1 = messageReactionsResults.findIndex((reactionCount) => reactionsEqual(reactionCount.reaction, a));
-            const idx2 = messageReactionsResults.findIndex((reactionCount) => reactionsEqual(reactionCount.reaction, b));
-            return (idx1 === -1 ? Infinity : idx1) - (idx2 === -1 ? Infinity : idx2);
-          });
-        }
-
-        return peerAvailableReactions;
+      this.apiManager.getAppConfig()
+    ], ([peerAvailableReactions, appConfig]) => {
+      const messageReactionsResults = message?.reactions?.results;
+      if(
+        messageReactionsResults &&
+        peerAvailableReactions.type === 'chatReactionsSome' &&
+        !peerAvailableReactions.trulyAll
+      ) {
+        peerAvailableReactions.reactions.sort((a, b) => {
+          if(a._ === 'reactionPaid') return -Infinity;
+          else if(a._ === 'reactionEmoji') return Infinity;
+          const idx1 = messageReactionsResults.findIndex((reactionCount) => reactionsEqual(reactionCount.reaction, a));
+          const idx2 = messageReactionsResults.findIndex((reactionCount) => reactionsEqual(reactionCount.reaction, b));
+          return (idx1 === -1 ? Infinity : idx1) - (idx2 === -1 ? Infinity : idx2);
+        });
       }
-    );
+
+      // reactions_uniq_max — once a message already carries the max distinct reactions,
+      // narrow the picker to the kinds already present (can't introduce a new distinct one)
+      // and flag it so the UI hides the custom-emoji search/packs (tdesktop/iOS/Android parity).
+      const uniqMax = appConfig?.reactions_uniq_max ?? DEFAULT_REACTIONS_UNIQ_MAX;
+      peerAvailableReactions.atUniqCap = isMessageAtUniqReactionCap(messageReactionsResults, uniqMax);
+      peerAvailableReactions.reactions = filterReactionsAtUniqCap(
+        peerAvailableReactions.reactions,
+        messageReactionsResults,
+        uniqMax
+      );
+
+      return peerAvailableReactions;
+    });
   }
 
   // public isReactionActive(reaction: string) {
@@ -420,6 +462,16 @@ export class AppReactionsManager extends AppManager {
   }
 
   public getMessagesReactions(peerId: PeerId, mids: number[]) {
+    mids = mids.filter((mid) => (
+      !this.appMessagesManager.isEphemeralMessageId(mid) &&
+      !this.appMessagesManager.isEphemeralMessage(
+        this.appMessagesManager.getMessageByPeer(peerId, mid)
+      )
+    ));
+    if(!mids.length) {
+      return Promise.resolve();
+    }
+
     return this.apiManager.invokeApiSingleProcess({
       method: 'messages.getMessagesReactions',
       params: {
@@ -436,6 +488,10 @@ export class AppReactionsManager extends AppManager {
   }
 
   public getMessageReactionsList(peerId: PeerId, mid: number, limit: number, reaction?: Reaction, offset?: string) {
+    if(isEphemeralMessageId(mid)) {
+      return Promise.reject({type: 'MESSAGE_ID_INVALID'} as ApiError);
+    }
+
     return this.apiManager.invokeApiSingleProcess({
       method: 'messages.getMessageReactionsList',
       params: {
@@ -446,9 +502,153 @@ export class AppReactionsManager extends AppManager {
         offset
       },
       processResult: (messageReactionsList) => {
-        this.appUsersManager.saveApiUsers(messageReactionsList.users);
+        this.appPeersManager.saveApiPeers(messageReactionsList);
         return messageReactionsList;
       }
+    });
+  }
+
+  public canDeleteParticipantReactions(peerId: PeerId) {
+    return peerId.isAnyChat() && this.appChatsManager.hasRights(peerId.toChatId(), 'delete_messages');
+  }
+
+  public reportParticipantReaction({
+    peerId,
+    mid,
+    participantPeerId
+  }: {
+    peerId: PeerId,
+    mid: number,
+    participantPeerId: PeerId
+  }) {
+    if(isEphemeralMessageId(mid)) {
+      return Promise.reject({type: 'MESSAGE_ID_INVALID'} as ApiError);
+    }
+
+    return this.apiManager.invokeApiSingle('messages.reportReaction', {
+      peer: this.appPeersManager.getInputPeerById(peerId),
+      id: getServerMessageId(mid),
+      reaction_peer: this.appPeersManager.getInputPeerById(participantPeerId)
+    });
+  }
+
+  private removeParticipantReactionsLocally({
+    peerId,
+    participantPeerId,
+    mid,
+    originMid,
+    knownReaction
+  }: {
+    peerId: PeerId,
+    participantPeerId: PeerId,
+    mid?: number,
+    originMid?: number,
+    knownReaction?: Reaction
+  }): number[] {
+    const storage = this.appMessagesManager.getHistoryMessagesStorage(peerId);
+    const messages = mid !== undefined ? [storage.get(mid)] : Array.from(storage.values());
+    const isForum = this.appPeersManager.isForum(peerId);
+    const isBotforum = this.appPeersManager.isBotforum(peerId);
+    const reactionMids: number[] = [];
+
+    for(const message of messages) {
+      if(!message?.reactions) {
+        continue;
+      }
+
+      if(getServerMessageId(message.mid) > 0) {
+        reactionMids.push(message.mid);
+      }
+
+      const reactions = removeParticipantReactions({
+        reactions: message.reactions,
+        participantPeerId,
+        knownReaction: message.mid === (mid ?? originMid) ? knownReaction : undefined
+      });
+      if(reactions === message.reactions) {
+        continue;
+      }
+
+      const threadId = (isForum || isBotforum) ? getMessageThreadId(message as Message.message, {isForum, isBotforum}) : undefined;
+      this.apiUpdatesManager.processLocalUpdate({
+        _: 'updateMessageReactions',
+        peer: this.appPeersManager.getOutputPeer(peerId),
+        msg_id: getServerMessageId(message.mid),
+        top_msg_id: threadId ? getServerMessageId(threadId) : undefined,
+        saved_peer_id: (message as Message.message).saved_peer_id,
+        reactions,
+        local: true
+      });
+    }
+
+    return reactionMids;
+  }
+
+  public deleteParticipantReaction({
+    peerId,
+    mid,
+    participantPeerId,
+    knownReaction
+  }: {
+    peerId: PeerId,
+    mid: number,
+    participantPeerId: PeerId,
+    knownReaction?: Reaction
+  }) {
+    if(isEphemeralMessageId(mid)) {
+      return Promise.reject({type: 'MESSAGE_ID_INVALID'} as ApiError);
+    }
+
+    this.removeParticipantReactionsLocally({peerId, participantPeerId, mid, knownReaction});
+
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'messages.deleteParticipantReaction',
+      params: {
+        peer: this.appPeersManager.getInputPeerById(peerId),
+        msg_id: getServerMessageId(mid),
+        participant: this.appPeersManager.getInputPeerById(participantPeerId)
+      },
+      processResult: (updates) => {
+        this.apiUpdatesManager.processUpdateMessage(updates);
+        return updates;
+      }
+    });
+  }
+
+  public deleteParticipantReactions({
+    peerId,
+    participantPeerId,
+    originMid,
+    knownReaction
+  }: {
+    peerId: PeerId,
+    participantPeerId: PeerId,
+    originMid?: number,
+    knownReaction?: Reaction
+  }) {
+    const reactionMids = this.removeParticipantReactionsLocally({
+      peerId,
+      participantPeerId,
+      mid: undefined,
+      originMid,
+      knownReaction
+    });
+
+    return this.apiManager.invokeApiSingle('messages.deleteParticipantReactions', {
+      peer: this.appPeersManager.getInputPeerById(peerId),
+      participant: this.appPeersManager.getInputPeerById(participantPeerId)
+    }).then((result) => {
+      // The bulk method returns Bool instead of reaction updates. Optimistic
+      // cleanup can only identify participants present in the truncated local
+      // lists, so refresh a bounded set of the newest loaded reaction counters.
+      const mids = reactionMids
+      .sort((a, b) => getServerMessageId(b) - getServerMessageId(a))
+      .slice(0, DELETE_PARTICIPANT_REACTIONS_REFRESH_LIMIT);
+      if(mids.length) {
+        this.getMessagesReactions(peerId, mids).catch(noop);
+      }
+
+      return result;
     });
   }
 
@@ -472,13 +672,15 @@ export class AppReactionsManager extends AppManager {
   public async sendReaction({
     message,
     reaction,
-    onlyLocal,
+    // onlyLocal,
     onlyLocalWithUpdate,
     onlyReturn,
     sendAsPeerId,
     count
   }: SendReactionOptions): Promise<MessageReactions> {
-    message = this.appMessagesManager.getMessageByPeer(message.peerId, message.mid) as Message.message;
+    if(this.appMessagesManager.isEphemeralMessage(message)) {
+      return message.reactions;
+    }
 
     if(reaction._ === 'availableReaction') {
       reaction = {
@@ -492,6 +694,8 @@ export class AppReactionsManager extends AppManager {
       this.apiManager.getLimit('reactions'),
       isPaidReaction && this.getPaidReactionPrivacy()
     ]);
+
+    message = this.appMessagesManager.getMessageByPeer(message.peerId, message.mid) as Message.message;
 
     // const lastSendingTimeKey = message.peerId + '_' + message.mid;
     // const lastSendingTime = this.lastSendingTimes.get(lastSendingTimeKey);
@@ -554,7 +758,7 @@ export class AppReactionsManager extends AppManager {
       };
     }
 
-    let reactions = onlyLocal ? message.reactions : copy(message.reactions);
+    let reactions = /* onlyLocal ? message.reactions :  */copy(message.reactions);
     const chosenReactions = reactions.results.filter((reactionCount) => reactionCount.chosen_order !== undefined && reactionCount.chosen_order >= 0);
     chosenReactions.sort((a, b) => b.chosen_order - a.chosen_order);
     const unsetReactions: ReactionCount[] = [];
@@ -706,15 +910,15 @@ export class AppReactionsManager extends AppManager {
       return reactions;
     }
 
-    if(onlyLocal) {
-      message.reactions = reactions;
-      this.rootScope.dispatchEvent('messages_reactions', [{
-        message: message as Message.message,
-        changedResults: [],
-        removedResults: []
-      }]);
-      return;
-    }
+    // if(onlyLocal) {
+    //   message.reactions = reactions;
+    //   this.rootScope.dispatchEvent('messages_reactions', [{
+    //     message: message as Message.message,
+    //     changedResults: [],
+    //     removedResults: []
+    //   }]);
+    //   return;
+    // }
 
     this.apiUpdatesManager.processLocalUpdate({
       _: 'updateMessageReactions',
@@ -779,7 +983,7 @@ export class AppReactionsManager extends AppManager {
         this.sendReaction({
           message,
           reaction: chosenReactions[0]?.reaction,
-          onlyLocal: true,
+          onlyLocalWithUpdate: true,
           sendAsPeerId
         });
       }
@@ -792,15 +996,43 @@ export class AppReactionsManager extends AppManager {
     this.sendReactionPromises.set(promiseKey, promise);
   }
 
+  private preloadGenericAnimations(count = 2) {
+    return Promise.resolve(this.appStickersManager.getLocalStickerSet('inputStickerSetEmojiGenericAnimations')).then((messagesStickerSet) => {
+      const documents = (messagesStickerSet.documents as Document.document[]).slice();
+      const promises: Promise<any>[] = [];
+      for(let i = 0; i < count && documents.length; ++i) {
+        const [document] = documents.splice(Math.floor(Math.random() * documents.length), 1);
+        promises.push(this.apiFileManager.downloadMediaURL({media: document}).catch(noop));
+      }
+
+      return Promise.all(promises);
+    });
+  }
+
   public getRandomGenericAnimation() {
     return callbackify(this.appStickersManager.getLocalStickerSet('inputStickerSetEmojiGenericAnimations'), (messagesStickerSet) => {
-      const length = messagesStickerSet.documents.length;
-      if(!length) {
+      const documents = messagesStickerSet.documents as Document.document[];
+      if(!documents.length) {
         return;
       }
 
-      const document = messagesStickerSet.documents[Math.floor(Math.random() * length)];
-      return document as Document.document;
+      const pickRandom = (documents: Document.document[]) => documents[Math.floor(Math.random() * documents.length)];
+      const isDownloaded = (document: Document.document) => {
+        const cacheContext = this.thumbsStorage.getCacheContext(document);
+        return !!(cacheContext.downloaded || cacheContext.url);
+      };
+
+      const downloaded = documents.filter(isDownloaded);
+      const notDownloaded = documents.filter((document) => !isDownloaded(document));
+
+      // * prefer an animation that can be played instantly, while warming up
+      // * another random one to keep the variety
+      const warmingUp = notDownloaded.length ? pickRandom(notDownloaded) : undefined;
+      if(warmingUp) {
+        this.apiFileManager.downloadMediaURL({media: warmingUp}).catch(noop);
+      }
+
+      return downloaded.length ? pickRandom(downloaded) : warmingUp;
     });
   }
 
@@ -860,7 +1092,7 @@ export class AppReactionsManager extends AppManager {
       processResult: (availableEffects) => {
         assumeType<MessagesAvailableEffects.messagesAvailableEffects>(availableEffects);
         availableEffects.documents.forEach((doc, idx, arr) => {
-          arr[idx] = this.appDocsManager.saveDoc(doc);
+          arr[idx] = this.appDocsManager.saveDoc(doc, AVAILABLE_EFFECTS_REFERENCE_CONTEXT);
         });
 
         availableEffects.effects.forEach((availableEffect) => {
@@ -899,14 +1131,12 @@ export class AppReactionsManager extends AppManager {
     }
 
     if(savedPeerId === undefined) {
-      if(message._ === 'messageService') return
       this.processMessageReactionsChanges({
         message,
         changedResults,
         removedResults,
         savedPeerId: this.appPeersManager.getPeerId(message.saved_peer_id)
       });
-      return
     }
 
     const tags = this.savedReactionsTags.get(savedPeerId);
@@ -1016,6 +1246,10 @@ export class AppReactionsManager extends AppManager {
   }
 
   public togglePaidReactionPrivacy(peerId: PeerId, mid: number, sendAsPeerId: PeerId) {
+    if(isEphemeralMessageId(mid)) {
+      return Promise.reject({type: 'MESSAGE_ID_INVALID'} as ApiError);
+    }
+
     return this.apiManager.invokeApi('messages.togglePaidReactionPrivacy', {
       peer: this.appPeersManager.getInputPeerById(peerId),
       msg_id: getServerMessageId(mid),

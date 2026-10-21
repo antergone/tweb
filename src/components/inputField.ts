@@ -1,34 +1,60 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+import labelControl from '@helpers/dom/labelControl';
+import Modes from '@config/modes';
+import type CustomEmojiElement from '@lib/customEmoji/element';
+import {createUniqueId} from 'solid-js';
+import type {AnimationItemGroup} from '@components/animationIntersector';
+import {CustomEmojiRendererElement} from '@lib/customEmoji/renderer';
+import {bindActiveWindowListener} from '@helpers/appWindow';
+import cancelEvent from '@helpers/dom/cancelEvent';
+import simulateEvent from '@helpers/dom/dispatchEvent';
+import documentFragmentToHTML from '@helpers/dom/documentFragmentToHTML';
+import findUpAttribute from '@helpers/dom/findUpAttribute';
+import findUpTag from '@helpers/dom/findUpTag';
+import getCaretPosNew from '@helpers/dom/getCaretPosNew';
+import getRichValueWithCaret from '@helpers/dom/getRichValueWithCaret';
+import isInputEmpty, {isInputPlaceholderEmpty} from '@helpers/dom/isInputEmpty';
+import replaceContent from '@helpers/dom/replaceContent';
+import RichInputHandler, {USING_BOMS} from '@helpers/dom/richInputHandler';
+import selectElementContents from '@helpers/dom/selectElementContents';
+import setInnerHTML, {setDirection} from '@helpers/dom/setInnerHTML';
+import {MessageEntity} from '@layer';
+import type {LocalTextWithEntities} from '@types';
+import {i18n, LangPackKey, _i18n} from '@lib/langPack';
+import {NULL_PEER_ID} from '@appManagers/constants';
+import parseEntities from '@lib/richTextProcessor/parseEntities';
+import wrapDraftText from '@lib/richTextProcessor/wrapDraftText';
+import {createCustomFiller, insertCustomFillers} from '@lib/richTextProcessor/wrapRichText';
+import type {MarkupTooltipTypes} from '@components/chat/markupTooltip';
+import {getChatInputEditor} from '@components/chat/inputEditor/registry';
+import {isProseMirrorPaste} from '@components/chat/inputEditor/paste';
 
-import type CustomEmojiElement from '../lib/customEmoji/element';
-import type {AnimationItemGroup} from './animationIntersector';
-import {CustomEmojiRendererElement} from '../lib/customEmoji/renderer';
-import cancelEvent from '../helpers/dom/cancelEvent';
-import simulateEvent from '../helpers/dom/dispatchEvent';
-import documentFragmentToHTML from '../helpers/dom/documentFragmentToHTML';
-import findUpAttribute from '../helpers/dom/findUpAttribute';
-import findUpTag from '../helpers/dom/findUpTag';
-import getCaretPosNew from '../helpers/dom/getCaretPosNew';
-import getRichValueWithCaret from '../helpers/dom/getRichValueWithCaret';
-import isInputEmpty from '../helpers/dom/isInputEmpty';
-import replaceContent from '../helpers/dom/replaceContent';
-import RichInputHandler, {USING_BOMS} from '../helpers/dom/richInputHandler';
-import selectElementContents from '../helpers/dom/selectElementContents';
-import setInnerHTML, {setDirection} from '../helpers/dom/setInnerHTML';
-import {MessageEntity} from '../layer';
-import {i18n, LangPackKey, _i18n} from '../lib/langPack';
-import {NULL_PEER_ID} from '../lib/mtproto/mtproto_config';
-import mergeEntities from '../lib/richTextProcessor/mergeEntities';
-import parseEntities from '../lib/richTextProcessor/parseEntities';
-import wrapDraftText from '../lib/richTextProcessor/wrapDraftText';
-import {createCustomFiller, insertCustomFillers} from '../lib/richTextProcessor/wrapRichText';
-import type {MarkupTooltipTypes} from './chat/markupTooltip';
+/**
+ * What a field can be filled with. Text plus entities is the representation the
+ * app already holds wherever it loads a draft, a message being edited or a fact
+ * check; rendering it into DOM only to parse it back is what the editor made
+ * unnecessary, so the setter takes it as is and each backend renders it once.
+ *
+ * A field without an editor still renders it to DOM here, with no animation
+ * group and no middleware — one that has custom emoji to keep alive for a
+ * limited time builds its own node and passes that instead.
+ */
+export type InputFieldValue = Parameters<typeof replaceContent>[1] | LocalTextWithEntities;
+
+// A node always carries a `nodeType`; asking for one instead of `instanceof Node`
+// also answers for a node from the popped-out (Document PiP) window.
+function asTextWithEntities(value: InputFieldValue) {
+  return value && typeof(value) === 'object' && (value as Node).nodeType === undefined ?
+    value as LocalTextWithEntities :
+    undefined;
+}
 
 export async function insertRichTextAsHTML(input: HTMLElement, text: string, entities: MessageEntity[], wrappingForPeerId?: PeerId) {
+  const editor = getChatInputEditor(input);
+  if(editor) {
+    editor.replaceSelection(text, entities);
+    return;
+  }
+
   const loadPromises: Promise<any>[] = [];
   const wrappingCustomEmoji = entities?.some((entity) => entity._ === 'messageEntityCustomEmoji');
   const renderer = wrappingCustomEmoji ? createCustomEmojiRendererForInput() : undefined;
@@ -76,10 +102,10 @@ export async function insertRichTextAsHTML(input: HTMLElement, text: string, ent
     //   pre.selection.collapseToEnd();
     // }
   } else {
-    const range = document.createRange();
+    const range = input.ownerDocument.createRange();
     let node = input.lastChild;
     if(!node) {
-      input.append(node /* = textNode */ = document.createTextNode(''));
+      input.append(node /* = textNode */ = input.ownerDocument.createTextNode(''));
     }
 
     range.setStartAfter(node);
@@ -95,7 +121,7 @@ export async function insertRichTextAsHTML(input: HTMLElement, text: string, ent
   // s.append(node);
   input.addEventListener('input', cancelEvent, {capture: true, once: true, passive: false});
   richInputHandler?.onBeforeInput({inputType: 'insertContent'});
-  window.document.execCommand('insertHTML', false, html);
+  input.ownerDocument.execCommand('insertHTML', false, html);
   Array.from(input.querySelectorAll<HTMLImageElement>('[data-ces]')).forEach((el, idx) => {
     delete el.dataset.ces;
     const customEmojiElement = customEmojiElements[idx];
@@ -155,125 +181,26 @@ export async function insertRichTextAsHTML(input: HTMLElement, text: string, ent
 }
 
 let init = () => {
-  document.addEventListener('paste', (e) => {
+  // Paste into a contenteditable that has no editor. Such a field carries no
+  // formatting — its value is a string plus, at most, emoji — so the clipboard's
+  // HTML has nothing to land in, and what the source itself calls plain text is
+  // the content. Follow the active window so paste into a popped-out
+  // (Document PiP) input is still intercepted.
+  bindActiveWindowListener((w) => w.document, 'paste', (e) => {
     const input = findUpAttribute(e.target, 'contenteditable="true"');
     if(!input) {
       return;
     }
+    if(getChatInputEditor(input) || isProseMirrorPaste(e)) return;
 
-    const noLinebreaks = !!input.dataset.noLinebreaks;
     e.preventDefault();
-    let text: string, entities: MessageEntity[];
 
-    // @ts-ignore
-    let plainText: string = (e.originalEvent || e).clipboardData.getData('text/plain').replace(/\r/g, '');
-    let usePlainText = true;
-
-    // @ts-ignore
-    let html: string = (e.originalEvent || e).clipboardData.getData('text/html') || plainText;
-
-    const filterEntity = (e: MessageEntity) => e._ === 'messageEntityEmoji' || (e._ === 'messageEntityLinebreak' && !noLinebreaks);
-    if(noLinebreaks) {
-      const regExp = /[\r\n]/g;
-      plainText = plainText.replace(regExp, '');
-      html = html.replace(regExp, '');
-    }
+    let text = e.clipboardData.getData('text/plain').replace(/\r/g, '');
+    // A field built without linebreaks has one line to put this on.
+    if(input.dataset.noLinebreaks) text = text.replace(/\n/g, '');
 
     const peerId = (input.dataset.peerId || NULL_PEER_ID).toPeerId();
-    if(html.trim()) {
-      // console.log(html.replace(/ (style|class|id)=".+?"/g, ''));
-
-      html = html.replace(/<style([\s\S]*)<\/style>/, '');
-      html = html.replace(/<!--([\s\S]*?)-->/g, '');
-      html = html.replace('<br class="Apple-interchange-newline">', '');
-      html = html.replace(/\r/g, '');
-
-      const match = html.match(/<body>([\s\S]*)<\/body>/);
-      if(match) {
-        html = match[1].trim();
-      }
-
-      // const s = cleanHTML(html, true) as NodeList;
-      // console.log(s);
-
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      const span = doc.body || document.createElement('body');
-
-      // const span: HTMLElement = document.createElement('span');
-      // span.innerHTML = html;
-      // span.append(...Array.from(s));
-
-      let curChild = span.firstChild;
-      while(curChild) { // * fix whitespace between elements like <p>asd</p>\n<p>zxc</p>
-        const nextSibling = curChild.nextSibling;
-        if(curChild.nodeType === curChild.TEXT_NODE) {
-          if(!curChild.nodeValue.trim()) {
-            curChild.remove();
-          }
-        }
-
-        curChild = nextSibling;
-      }
-
-      const richValue = getRichValueWithCaret(span, true, false);
-
-      const canWrapCustomEmojis = !!input.dataset.canWrapCustomEmojis || !!peerId;
-      if(!canWrapCustomEmojis) {
-        richValue.entities = richValue.entities.filter((entity) => entity._ !== 'messageEntityCustomEmoji');
-      }
-
-      /* if(false) */ { // * fix extra new lines appearing from <p> (can have them from some sources, like macOS Terminal)
-        const lines = richValue.value.split('\n');
-        let textLength = 0;
-        for(let lineIndex = 0; lineIndex < lines.length; ++lineIndex) {
-          const line = lines[lineIndex];
-          textLength += line.length;
-
-          const index = textLength;
-          if(plainText[index] !== '\n' && lineIndex !== (lines.length - 1)) {
-            const nextLine = lines.splice(lineIndex + 1, 1)[0];
-            lines[lineIndex] = line + nextLine;
-
-            // fix entities
-            richValue.entities.forEach((entity) => {
-              if(entity.offset >= index) {
-                entity.offset -= 1;
-              }
-            });
-
-            textLength += nextLine.length;
-          }
-
-          textLength += 1;
-        }
-
-        const correctedText = lines.join('\n');
-        richValue.value = correctedText;
-      }
-
-      const richTextLength = richValue.value.replace(/\s/g, '').length;
-      const plainTextLength = plainText.replace(/\s/g, '').length;
-      if(richTextLength === plainTextLength ||
-        richValue.entities.find((entity) => entity._ === 'messageEntityCustomEmoji')) {
-        text = richValue.value;
-        entities = richValue.entities;
-        usePlainText = false;
-
-        let entities2 = parseEntities(text);
-        entities2 = entities2.filter(filterEntity);
-        entities = mergeEntities(entities, entities2);
-      }
-
-      // console.log('usePlainText', usePlainText);
-    }
-
-    if(usePlainText) {
-      text = plainText;
-      entities = parseEntities(text);
-      entities = entities.filter(filterEntity);
-    }
-
+    const entities = parseEntities(text).filter((entity) => entity._ === 'messageEntityEmoji');
     insertRichTextAsHTML(input, text, entities, peerId);
   });
 
@@ -390,11 +317,14 @@ function processCustomEmojisInInput(input: HTMLElement) {
   renderer.forceRender();
 }
 
+let inputFieldErrorIdSeed = 0;
+
 export default class InputField {
   public container: HTMLElement;
   public input: HTMLElement;
   public label: HTMLLabelElement;
   public placeholder: HTMLElement;
+  public errorLabel: HTMLElement;
 
   public originalValue: string;
 
@@ -402,6 +332,8 @@ export default class InputField {
   public validate: () => boolean;
 
   public allowStartingSpace: boolean;
+
+  private isInputHidden = false;
 
   constructor(public options: InputFieldOptions = {}) {
     this.container = document.createElement('div');
@@ -429,6 +361,12 @@ export default class InputField {
 
       input = this.container.firstElementChild as HTMLElement;
       input.contentEditable = '' + !!canBeEdited;
+      input.setAttribute('role', 'textbox');
+      input.setAttribute('aria-multiline', `${!!options.withLinebreaks}`);
+      if(!canBeEdited) input.setAttribute('aria-readonly', 'true');
+      // * browser & extension translators rewrite the text nodes right inside the contenteditable,
+      // * so the value read back from the DOM is the translated one — with broken entities and custom emojis
+      input.translate = false;
       // const observer = new MutationObserver(() => {
       //   //checkAndSetRTL(input);
 
@@ -440,7 +378,9 @@ export default class InputField {
       RichInputHandler.getInstance();
 
       input.addEventListener('mousedown', (e) => {
-        const selection = document.getSelection();
+        if(getChatInputEditor(input)) return;
+
+        const selection = input.ownerDocument.defaultView.getSelection();
         if(!selection.isCollapsed) {
           return;
         }
@@ -454,7 +394,7 @@ export default class InputField {
         const centerX = rect.left + rect.width / 2;
         const focusOnNext = e.clientX >= centerX;
 
-        const range = document.createRange();
+        const range = input.ownerDocument.createRange();
         range.setStartAfter(focusOnNext ? placeholder : placeholder.previousSibling ?? placeholder);
         selection.removeAllRanges();
         selection.addRange(range);
@@ -469,13 +409,14 @@ export default class InputField {
         // return;
         // * because if delete all characters there will br left
         const isEmpty = this.isEmpty();
-        if(isEmpty) {
+        const editor = getChatInputEditor(input);
+        if(isEmpty && !editor) {
           // const textNode = Array.from(input.childNodes).find((node) => node.nodeType === node.TEXT_NODE) || document.createTextNode('');
           input.replaceChildren();
           // input.append(document.createTextNode('')); // need first text node to support history stack
         }
 
-        this.setEmpty(isEmpty);
+        this.setEmpty();
 
         // const fillers = Array.from(input.querySelectorAll('.emoji-filler')) as HTMLElement[];
         // fillers.forEach((filler) => {
@@ -500,7 +441,7 @@ export default class InputField {
         //   const parentElement = el.parentElement;
         //   (parentElement === input ? el : parentElement).remove();
         // });
-        USING_BOMS && Array.from(input.querySelectorAll('br:not(.br-not-br)')).forEach((el) => {
+        !editor && USING_BOMS && Array.from(input.querySelectorAll('br:not(.br-not-br)')).forEach((el) => {
           // const parentElement = el.parentElement;
           el.remove();
           // if(!parentElement.children.length && !parentElement.textContent) {
@@ -508,9 +449,10 @@ export default class InputField {
           // }
         });
 
-        insertCustomFillers(Array.from(input.querySelectorAll('.input-something')));
-
-        processCustomEmojisInInput(input);
+        if(!editor) {
+          insertCustomFillers(Array.from(input.querySelectorAll('.input-something')));
+          processCustomEmojisInInput(input);
+        }
 
         // .forEach((el) => el.remove());
       });
@@ -531,7 +473,7 @@ export default class InputField {
           (input as HTMLInputElement).value = '';
         }
 
-        this.setEmpty(isEmpty);
+        this.setEmpty();
       });
     }
 
@@ -544,6 +486,8 @@ export default class InputField {
     if(placeholder) {
       // if(options.placeholderAsElement) {
       this.placeholder = document.createElement('span');
+      this.placeholder.id = createUniqueId();
+      if(!label) input.setAttribute('aria-labelledby', this.placeholder.id);
       this.placeholder.classList.add('input-field-placeholder');
       this.container.append(this.placeholder);
       _i18n(this.placeholder, placeholder, undefined);
@@ -558,29 +502,45 @@ export default class InputField {
       this.container.append(border);
     }
 
-    if(label != null) {
+    if(label != null || maxLength) {
       this.label = document.createElement('label');
+      this.label.id = createUniqueId();
+      input.setAttribute(label ? 'aria-labelledby' : 'aria-describedby', this.label.id);
+      if(input.tagName === 'INPUT' || input.tagName === 'TEXTAREA') {
+        input.id ||= createUniqueId();
+        this.label.htmlFor = input.id;
+      }
       this.setLabel();
       this.container.append(this.label);
     }
 
+    // Give the control an accessible name by associating it with the floating
+    // label (or, failing that, the placeholder). `aria-labelledby` works for
+    // both the plain <input> and the contenteditable rich-text div.
+    const namingElement = this.label || this.placeholder;
+    labelControl(input, namingElement);
+
     if(maxLength) {
-      const labelEl = this.container.lastElementChild as HTMLLabelElement;
+      const labelEl = this.label;
       let showingLength = false;
 
       const onInput = () => {
         const wasError = input.classList.contains('error');
         // * https://stackoverflow.com/a/54369605 #2 to count emoji as 1 symbol
-        const inputLength = plainText ? (input as HTMLInputElement).value.length : [...getRichValueWithCaret(input, false, false).value].length;
+        const inputLength = plainText ?
+          (input as HTMLInputElement).value.length :
+          [...getRichValueWithCaret(input, false, false).value].length;
         const diff = maxLength - inputLength;
         const isError = diff < 0;
         input.classList.toggle('error', isError);
+        labelEl.classList.toggle('error', isError);
 
         // this.onLengthChange && this.onLengthChange(inputLength, isError);
 
         if(isError || diff <= showLengthOn) {
           this.setLabel();
           labelEl.append(` (${maxLength - inputLength})`);
+          labelEl.style.visibility = 'visible';
           if(!showingLength) showingLength = true;
         } else if((wasError && !isError) || showingLength) {
           this.setLabel();
@@ -636,18 +596,20 @@ export default class InputField {
     this.label.textContent = '';
     if(this.options.labelText) {
       setInnerHTML(this.label, this.options.labelText);
-    } else {
+    } else if(this.options.label) {
       this.label.append(i18n(this.options.label, this.options.labelOptions));
     }
     this.label.style.visibility = this.label.textContent ? 'visible' : 'hidden';
   }
 
   get value(): string {
-    return this.options.plainText ? (this.input as HTMLInputElement).value : getRichValueWithCaret(this.input, false, false).value;
+    return this.options.plainText ?
+      (this.input as HTMLInputElement).value :
+      getRichValueWithCaret(this.input, false, false).value;
     // return getRichValue(this.input);
   }
 
-  set value(value: Parameters<typeof replaceContent>[1]) {
+  set value(value: InputFieldValue) {
     this.setValueSilently(value, true);
     this.simulateInputEvent();
   }
@@ -656,25 +618,48 @@ export default class InputField {
     simulateEvent(this.input, 'input');
   }
 
-  public setValueSilently(value: Parameters<typeof replaceContent>[1], fromSet?: boolean) {
+  public syncFromInput() {
+    this.setEmpty();
+  }
+
+  public setValueSilently(value: InputFieldValue, fromSet?: boolean) {
     if(this.options.plainText) {
       (this.input as HTMLInputElement).value = value as string;
     } else {
-      replaceContent(this.input, value);
-      processCustomEmojisInInput(this.input);
+      const textWithEntities = asTextWithEntities(value);
+      const editor = getChatInputEditor(this.input);
+      if(editor) {
+        if(textWithEntities) editor.setTextWithEntities(textWithEntities.text, textWithEntities.entities);
+        else editor.setContent(value as Parameters<typeof replaceContent>[1]);
+      } else {
+        replaceContent(this.input, textWithEntities ? wrapDraftText(textWithEntities.text, {
+          entities: textWithEntities.entities,
+          wrappingForPeerId: this.input.dataset.peerId?.toPeerId()
+        }) : value as Parameters<typeof replaceContent>[1]);
+        processCustomEmojisInInput(this.input);
+      }
     }
 
     this.setEmpty();
   }
 
-  private setEmpty = (empty = this.isEmpty()) => {
+  private setEmpty = (empty = this.isPlaceholderEmpty()) => {
     [this.input, this.placeholder].filter(Boolean).forEach((el) => {
       el.classList.toggle('is-empty', empty);
     });
   };
 
+  private isPlaceholderEmpty() {
+    return isInputPlaceholderEmpty(this.input, this.allowStartingSpace) || this.isInputHidden;
+  }
+
+  public setHidden(hidden: boolean) {
+    this.isInputHidden = hidden;
+    this.setEmpty();
+  }
+
   public isEmpty() {
-    return isInputEmpty(this.input, this.allowStartingSpace);
+    return isInputEmpty(this.input, this.allowStartingSpace) || this.isInputHidden;
   }
 
   public isChanged() {
@@ -709,21 +694,69 @@ export default class InputField {
     this.setDraftValue(value, silent);
   }
 
-  public setState(state: InputState, label?: LangPackKey) {
-    if(label) {
+  private removeErrorLabel() {
+    if(!this.errorLabel) return;
+
+    const describedBy = (this.input.getAttribute('aria-describedby') || '')
+    .split(/\s+/)
+    .filter((id) => id && id !== this.errorLabel.id);
+
+    if(describedBy.length) {
+      this.input.setAttribute('aria-describedby', describedBy.join(' '));
+    } else {
+      this.input.removeAttribute('aria-describedby');
+    }
+
+    this.errorLabel.remove();
+    this.errorLabel = undefined;
+    this.container.classList.remove('has-error-label');
+  }
+
+  public setState(state: InputState, label?: LangPackKey, labelOptions?: any[]) {
+    const isError = !!(state & InputState.Error);
+
+    // Without the a11y layer the error replaces the floating label's text, as it
+    // always did; the layer gives it an element of its own to announce.
+    if(label && isError && Modes.a11y) {
+      if(!this.errorLabel) {
+        this.errorLabel = this.container.ownerDocument.createElement('span');
+        this.errorLabel.id = 'input-field-error-' + (++inputFieldErrorIdSeed);
+        this.errorLabel.classList.add('input-field-error-label');
+        this.errorLabel.setAttribute('role', 'alert');
+        this.container.append(this.errorLabel);
+      }
+
+      this.errorLabel.replaceChildren(i18n(label, labelOptions ?? this.options.labelOptions));
+      this.container.classList.add('has-error-label');
+
+      const describedBy = new Set(
+        (this.input.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean)
+      );
+      describedBy.add(this.errorLabel.id);
+      this.input.setAttribute('aria-describedby', [...describedBy].join(' '));
+    } else if(label) {
       this.label.textContent = '';
-      this.label.append(i18n(label, this.options.labelOptions));
+      this.label.append(i18n(label, labelOptions ?? this.options.labelOptions));
       this.label.style.visibility = 'visible';
     } else {
       this.setLabel();
     }
 
-    this.input.classList.toggle('error', !!(state & InputState.Error));
+    if((!isError || !label) && this.errorLabel) {
+      this.removeErrorLabel();
+    }
+
+    if(isError) {
+      this.input.setAttribute('aria-invalid', 'true');
+    } else {
+      this.input.removeAttribute('aria-invalid');
+    }
+    this.input.classList.toggle('error', isError);
     this.input.classList.toggle('valid', !!(state & InputState.Valid));
   }
 
-  public setError(label?: LangPackKey) {
-    this.setState(InputState.Error, label);
+  public setError(label?: LangPackKey, labelOptions?: any[]) {
+    this.setState(InputState.Error, label, labelOptions);
   }
 
   public toggleForceFocus(enabled: boolean) {

@@ -1,4 +1,4 @@
-import {StoryItem} from '../../../../layer';
+import {StoryItem} from '@layer';
 
 export type StoryPrivacyType = 'public' | 'close' | 'contacts' | 'selected';
 
@@ -13,7 +13,11 @@ export default function getStoryPrivacyType(story: StoryItem.storyItem) {
   } else if(story.pFlags.contacts) {
     privacyType = 'contacts';
   } else if(story.privacy) {
-    if(story.privacy.some((privacyRule) => privacyRule._ === 'privacyValueAllowContacts')) {
+    if(story.privacy.some((rule) => rule._ === 'privacyValueAllowCloseFriends')) {
+      privacyType = 'close';
+    } else if(story.privacy.some((rule) => rule._ === 'privacyValueAllowAll')) {
+      privacyType = 'public';
+    } else if(story.privacy.some((privacyRule) => privacyRule._ === 'privacyValueAllowContacts')) {
       privacyType = 'contacts';
     } else {
       privacyType = 'selected';

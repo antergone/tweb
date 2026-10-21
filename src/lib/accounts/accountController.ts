@@ -1,22 +1,33 @@
-import {MOUNT_CLASS_TO} from '../../config/debug';
-import App from '../../config/app';
-import tsNow from '../../helpers/tsNow';
-import type {TrueDcId} from '../../types';
+import {MOUNT_CLASS_TO} from '@config/debug';
+import App from '@config/app';
+import tsNow from '@helpers/tsNow';
+import type {TrueDcId} from '@types';
 
-import sessionStorage from '../sessionStorage';
-import DeferredIsUsingPasscode from '../passcode/deferredIsUsingPasscode';
-import StaticUtilityClass from '../staticUtilityClass';
+import sessionStorage from '@lib/sessionStorage';
+import DeferredIsUsingPasscode from '@lib/passcode/deferredIsUsingPasscode';
+import StaticUtilityClass from '@lib/staticUtilityClass';
 
-import {AccountSessionData, ActiveAccountNumber} from './types';
-import {MAX_ACCOUNTS} from './constants';
+import {AccountSessionData, ActiveAccountNumber} from '@lib/accounts/types';
+import {MAX_ACCOUNTS} from '@lib/accounts/constants';
+import bytesToHex from '@helpers/bytes/bytesToHex';
+import randomize from '@helpers/array/randomize';
+import noop from '@helpers/noop';
+
+type AccountDataChanges = Partial<AccountSessionData> | ((data: AccountSessionData) => Partial<AccountSessionData> | undefined);
 
 export class AccountController extends StaticUtilityClass {
+  // * the write in progress of each account: every update reads the whole data, merges and writes it
+  // * back, so two at once would lose one of them
+  private static updates: Map<ActiveAccountNumber, Promise<unknown>> = new Map();
+  // * Set once the slots start moving after a log out, and never cleared: the worker is terminated
+  // * right after, and until then every live writer still holds its old account number. A write that
+  // * can be skipped (the temporary auth keys) checks it and writes nothing
+  public static shifting: boolean;
+
   static async getTotalAccounts() {
-    const promises = ([1, 2, 3, 4] as const).map((accountNumber) => sessionStorage.get(`account${accountNumber}`));
-
+    const promises = ([1, 2, 3, 4] as const).map((accountNumber) => this.get(accountNumber));
     const allAccountsData = await Promise.all(promises);
-
-    return allAccountsData.filter((accountData) => !!accountData?.userId).length;
+    return allAccountsData.filter((accountData) => !!accountData.userId).length;
   }
 
   static async getUnencryptedTotalAccounts() {
@@ -24,35 +35,83 @@ export class AccountController extends StaticUtilityClass {
   }
 
   static async getUserIds() {
-    const promises = ([1, 2, 3, 4] as const).map((accountNumber) => sessionStorage.get(`account${accountNumber}`));
-
+    const promises = ([1, 2, 3, 4] as const).map((accountNumber) => this.get(accountNumber));
     const allAccountsData = await Promise.all(promises);
-
-    return allAccountsData.map((accountData) => accountData?.userId).filter(Boolean);
+    return allAccountsData.map((accountData) => accountData.userId).filter(Boolean);
   }
 
-  static async get(accountNumber: ActiveAccountNumber) {
-    const data = await sessionStorage.get(`account${accountNumber}`);
-    this.fillFingerprint(data);
+  static async get(accountNumber: ActiveAccountNumber, updating?: boolean) {
+    const data = await sessionStorage.get(`account${accountNumber}`) || {} as AccountSessionData;
+
+    if(!updating && this.fillMissingData(data)) {
+      await this.update(accountNumber, data);
+    }
+
     return data;
   }
 
-  static fillFingerprint(data: AccountSessionData) {
-    if(data && !data.auth_key_fingerprint) {
-      const key = `dc${App.baseDcId}_auth_key` as const;
-      const value = data[key];
-      data.auth_key_fingerprint = value ? data[key].slice(0, 8) : undefined;
-    }
+  static fillMissingData(data: AccountSessionData) {
+    return [
+      this.fillFingerprint(data),
+      this.fillPushKey(data)
+    ].some(Boolean);
   }
 
-  static async update(accountNumber: ActiveAccountNumber, data: Partial<AccountSessionData>, overrideAll = false) {
-    const prevData = await this.get(accountNumber);
-    this.fillFingerprint(data as AccountSessionData);
+  static fillFingerprint(data: AccountSessionData) {
+    if(!data.auth_key_fingerprint) {
+      const authKey = data[`dc${App.baseDcId}_auth_key`];
+      if(!authKey) {
+        return false;
+      }
+
+      data.auth_key_fingerprint = authKey ? authKey.slice(0, 8) : undefined;
+      return true;
+    }
+
+    return false;
+  }
+
+  static fillPushKey(data: AccountSessionData) {
+    if(!data.push_key && data.userId) {
+      data.push_key = bytesToHex(randomize(new Uint8Array(256)));
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * One at a time per account. `changes` can be a function of the data as it is at that moment, and
+   * can return `undefined` to write nothing
+   */
+  static update(accountNumber: ActiveAccountNumber, changes: AccountDataChanges, overrideAll = false) {
+    const promise = (this.updates.get(accountNumber) || Promise.resolve())
+    .catch(noop)
+    .then(() => this.write(accountNumber, changes, overrideAll));
+    this.updates.set(accountNumber, promise);
+    return promise;
+  }
+
+  /**
+   * Settles once the updates of the account asked for so far are written
+   */
+  static async whenUpdated(accountNumber: ActiveAccountNumber) {
+    await this.updates.get(accountNumber)?.catch(noop);
+  }
+
+  private static async write(accountNumber: ActiveAccountNumber, changes: AccountDataChanges, overrideAll: boolean) {
+    const prevData = await this.get(accountNumber, true);
+    const data = typeof(changes) === 'function' ? changes(prevData) : changes;
+    if(!data) {
+      return prevData;
+    }
 
     const updatedData = {
       ...(overrideAll ? {} : prevData),
       ...data
     };
+
+    this.fillMissingData(updatedData);
 
     await sessionStorage.set({
       [`account${accountNumber}`]: updatedData
@@ -76,11 +135,20 @@ export class AccountController extends StaticUtilityClass {
    * @param upTo Account to delete basically
    */
   static async shiftAccounts(upTo: ActiveAccountNumber) {
+    this.shifting = true;
+    // * what is already on its way to any of the moving slots lands first, then they move
+    const slots: ActiveAccountNumber[] = [];
+    for(let i = upTo; i <= MAX_ACCOUNTS; i++) {
+      slots.push(i as ActiveAccountNumber);
+    }
+
+    await Promise.all(slots.map((accountNumber) => this.whenUpdated(accountNumber)));
+
     for(let i = upTo; i <= MAX_ACCOUNTS; i++) {
       await sessionStorage.delete(`account${i as ActiveAccountNumber}`);
       if(i < MAX_ACCOUNTS) {
         const toMove = await this.get((i + 1) as ActiveAccountNumber);
-        toMove?.userId && (await this.update(i as ActiveAccountNumber, toMove, true));
+        toMove.userId && (await this.update(i as ActiveAccountNumber, toMove, true));
       }
     }
   }

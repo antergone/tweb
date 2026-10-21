@@ -1,11 +1,4 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-// import { bytesFromHex, addPadding } from "../../bin_utils";
-import {Codec} from './codec';
+import {Codec} from '@lib/mtproto/transports/codec';
 
 class AbridgedPacketCodec implements Codec {
   public tag = 0xef;

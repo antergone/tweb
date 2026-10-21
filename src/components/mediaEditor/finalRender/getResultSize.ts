@@ -1,5 +1,5 @@
-import {snapToViewport} from '../utils';
-import {defaultCodec, highResCodec} from './calcCodecAndBitrate';
+import {snapToViewport} from '@components/mediaEditor/utils';
+import {defaultCodec, highResCodec} from '@components/mediaEditor/finalRender/calcCodecAndBitrate';
 
 const SIDE_MAX = 2560;
 const SIDE_MIN = 240;
@@ -9,7 +9,7 @@ type Args = {
   videoType: 'video' | 'gif';
   imageWidth: number;
   imageRatio: number;
-  cropOffset: { width: number; height: number; };
+  cropOffset: {width: number; height: number;};
   newRatio: number;
   scale: number;
   quality?: number;

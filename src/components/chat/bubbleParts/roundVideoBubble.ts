@@ -1,17 +1,19 @@
-import createElementFromMarkup from '../../../helpers/createElementFromMarkup';
-import anchorCallback from '../../../helpers/dom/anchorCallback';
-import {doubleRaf} from '../../../helpers/schedulers';
-import pause from '../../../helpers/schedulers/pause';
-import {Message} from '../../../layer';
-import {i18n} from '../../../lib/langPack';
-import rootScope from '../../../lib/rootScope';
+import {animateValue, simpleEasing} from '@helpers/animateValue';
+import createElementFromMarkup from '@helpers/createElementFromMarkup';
+import anchorCallback from '@helpers/dom/anchorCallback';
+import {lerp} from '@helpers/lerp';
+import {doubleRaf} from '@helpers/schedulers';
+import pause from '@helpers/schedulers/pause';
+import {Message} from '@layer';
+import {i18n} from '@lib/langPack';
+import rootScope from '@lib/rootScope';
+import appMediaPlaybackController, {MediaSearchContext} from '@components/appMediaPlaybackController';
+import Icon from '@components/icon';
+import showPremiumPopup from '@components/popups/premium';
+import {hideToast, toastNew} from '@components/toast';
+import wrapDocument from '@components/wrappers/document';
+import {SpinnerElement} from '@components/spinner';
 
-import appMediaPlaybackController, {MediaSearchContext} from '../../appMediaPlaybackController';
-import Icon from '../../icon';
-import {animateValue, lerp, simpleEasing} from '../../mediaEditor/utils';
-import PopupPremium from '../../popups/premium';
-import {hideToast, toastNew} from '../../toast';
-import wrapDocument from '../../wrappers/document';
 
 type WrapRoundVideoBubbleOptions = {
   bubble: HTMLElement;
@@ -52,7 +54,7 @@ export function wrapRoundVideoBubble({
 
   const bubbleVideoClassNames = ['round', 'just-media'];
   const bubbleAudioClassNames = ['can-have-tail', 'voice-message'];
-  const selectorsToHideWhenCollapsed = ['.topic-name-button-container', '.reply', '.bubble-name-forwarded'];
+  const selectorsToHideWhenCollapsed = ['.bubble-name-chip-container', '.reply', '.bubble-name-forwarded'];
 
   const getBubblesContainer = () => bubble.closest('.bubbles');
 
@@ -201,10 +203,10 @@ export function wrapRoundVideoBubble({
   async function showAudio() {
     if(!rootScope.getPremium()) {
       toastNew({
-        langPackKey: 'RoundVideoTranscription.PremiumAlert',
+        langPackKey: 'AudioAndVideoTranscription.PremiumAlert',
         langPackArguments: [anchorCallback(() => {
           hideToast();
-          PopupPremium.show({feature: 'voice_to_text'});
+          showPremiumPopup({feature: 'voice_to_text'});
         })]
       });
       return;
@@ -215,7 +217,7 @@ export function wrapRoundVideoBubble({
 
     if(!hasAddedTranscription) {
       hasAddedTranscription = true;
-      const spinner = createSpinner();
+      const spinner = new SpinnerElement();
       transcribe.append(spinner);
       const transcribedText = document.createElement('div');
       transcribedText.classList.add('video-transcribed-text');
@@ -319,7 +321,9 @@ export function wrapRoundVideoBubble({
 
     const bubbleStyle = window.getComputedStyle(bubbleTail);
     const initialTailTransform = bubbleStyle.transform;
-    bubbleTail.style.transform = `${initialTailTransform !== 'none' ? initialTailTransform : ''} translateX(calc(100% * var(--reflect)))`;
+    // * the computed transform already holds the tail's mirroring (`scaleX`), so the shift is along the
+    // * tail's own axis: into the bubble on either side, in either direction
+    bubbleTail.style.transform = `${initialTailTransform !== 'none' ? initialTailTransform : ''} translateX(100%)`;
     bubbleTail.style.transition = '.2s';
 
     if(true)
@@ -396,6 +400,7 @@ export function wrapRoundVideoBubble({
 
     const audioElement = await wrapDocument({
       message: message as any,
+      middleware: bubble.middlewareHelper.get(),
       customAudioToTextButton: closeButton,
       shouldWrapAsVoice: true,
       globalMedia,
@@ -404,19 +409,4 @@ export function wrapRoundVideoBubble({
     audioMessageContainer.append(audioElement);
     // audioContainer.append(transcribedText);
   })();
-}
-
-function createSpinner() {
-  return createElementFromMarkup(`<svg class="transcribe-button-spinner-svg" viewBox="0 0 24 24" width="100" height="100">
-    <circle
-      cx="12"
-      cy="12"
-      r="10.5"
-      fill="none"
-      stroke="white"
-      stroke-width="1"
-      stroke-linecap="round"
-      stroke-dashoffset="0"
-    ></circle>
-  </svg>`);
 }

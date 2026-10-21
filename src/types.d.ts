@@ -1,6 +1,6 @@
-import {AuthSentCode} from './layer';
-import type {ApiError} from './lib/mtproto/apiManager';
-import {ActiveAccountNumber} from './lib/sessionStorage';
+import {AccountSentEmailCode, AuthSentCode} from '@layer';
+import type {ApiError} from '@appManagers/apiManager';
+import {ActiveAccountNumber} from '@lib/sessionStorage';
 
 export type DcId = number;
 export type TrueDcId = 1 | 2 | 3 | 4 | 5;
@@ -13,6 +13,7 @@ export type InvokeApiOptions = Partial<{
   floodMaxTimeout: number,
   noErrorBox: true,
   fileUpload: true,
+  gzipCompress: true,
   ignoreErrors: true,
   fileDownload: true,
   createNetworker: true,
@@ -52,7 +53,7 @@ export type AnyFunction = (...args: any) => any;
 export type AnyToVoidFunction = (...args: any) => void;
 export type NoneToVoidFunction = () => void;
 
-export type Awaited<T> = T extends PromiseLike<infer U> ? Awaited<U> : T;
+// export type Awaited<T> = T extends PromiseLike<infer U> ? Awaited<U> : T;
 
 // https://stackoverflow.com/a/60762482/6758968
 type Shift<A extends Array<any>> = ((...args: A) => void) extends ((...args: [A[0], ...infer R]) => void) ? R : never;
@@ -82,8 +83,10 @@ type Impossible<K extends keyof any> = {
 // using generics.
 type NoExtraProperties<T, U extends T = T> = U & Impossible<Exclude<keyof U, keyof T>>;
 
-type ModifyFunctionsToAsync<T> = {
-  [key in keyof T]: T[key] extends (...args: infer A) => infer R ? (R extends PromiseLike<infer O> ? T[key] : (...args: A) => Promise<Awaited<R>>) : T[key]
+export type ModifyFunctionToAsync<T> = T extends (...args: infer A) => infer R ? (R extends PromiseLike<infer O> ? T : (...args: A) => Promise<Awaited<R>>) : T;
+
+export type ModifyFunctionsToAsync<T> = {
+  [key in keyof T]: ModifyFunctionToAsync<T[key]>
 };
 
 export type Mutable<T> = {
@@ -109,8 +112,18 @@ export type ObjectPath<T extends object> =
   T extends any[] ? (keyof T & number) : (keyof T & (number | string))
 ];
 
+export type Pair<Left, Right> = [Left, Right];
 
-export type AuthState = AuthState.signIn | AuthState.signQr | AuthState.authCode | AuthState.password | AuthState.signUp | AuthState.signedIn | AuthState.signImport;
+type PartialByKeys<T, K extends keyof T = never> =
+  Omit<T, K> &
+  Partial<Pick<T, K>>;
+
+  type FilterBooleanKeys<T> = {
+    [K in keyof T]: T[K] extends boolean ? K : never
+  }[keyof T];
+
+
+export type AuthState = AuthState.signIn | AuthState.signQr | AuthState.authCode | AuthState.emailSetup | AuthState.emailSetupCode | AuthState.password | AuthState.signUp | AuthState.signedIn | AuthState.signImport;
 export namespace AuthState {
   export type signIn = {
     _: 'authStateSignIn'
@@ -123,6 +136,21 @@ export namespace AuthState {
   export type authCode = {
     _: 'authStateAuthCode',
     sentCode: AuthSentCode.authSentCode
+  };
+
+  /** `auth.sentCodeTypeSetUpEmailRequired` — a login email has to be added before signing in. */
+  export type emailSetup = {
+    _: 'authStateEmailSetup',
+    phone_number: string,
+    phone_code_hash: string
+  };
+
+  /** The code `account.sendVerifyEmailCode` mailed to the address entered in `emailSetup`. */
+  export type emailSetupCode = {
+    _: 'authStateEmailSetupCode',
+    phone_number: string,
+    phone_code_hash: string,
+    sentCode: AccountSentEmailCode.accountSentEmailCode
   };
 
   export type password = {
@@ -247,7 +275,9 @@ export type TelegramWebViewEventMap = {
     text: string,
     color: string,
     text_color: string,
-    is_progress_visible: boolean
+    is_progress_visible: boolean,
+    has_shine_effect?: boolean,
+    icon_custom_emoji_id?: DocId
   },
   web_app_setup_secondary_button: {
     is_visible: boolean,
@@ -256,7 +286,9 @@ export type TelegramWebViewEventMap = {
     color: string,
     text_color: string,
     is_progress_visible: boolean
-    position: 'left' | 'right' | 'top' | 'bottom'
+    position: 'left' | 'right' | 'top' | 'bottom',
+    has_shine_effect?: boolean,
+    icon_custom_emoji_id?: DocId
   },
   web_app_setup_back_button: {
     is_visible: boolean
@@ -332,6 +364,7 @@ export type TelegramWebViewEventMap = {
   }
   web_app_share_to_story: unknown,
   web_app_send_prepared_message: {id: string},
+  web_app_request_chat: {req_id: string},
   web_app_request_fullscreen: void,
   web_app_exit_fullscreen: void,
   web_app_verify_age: {
@@ -407,33 +440,33 @@ export type TelegramWebViewSendEventMap = {
     token_saved: boolean
     device_id: string
   },
-  accelerometer_failed: { error: string },
+  accelerometer_failed: {error: string},
   accelerometer_started: void,
   accelerometer_stopped: void,
-  accelerometer_changed: { x: number, y: number, z: number },
-  gyroscope_failed: { error: string },
+  accelerometer_changed: {x: number, y: number, z: number},
+  gyroscope_failed: {error: string},
   gyroscope_started: void,
   gyroscope_stopped: void,
-  gyroscope_changed: { x: number, y: number, z: number },
-  device_orientation_failed: { error: string },
+  gyroscope_changed: {x: number, y: number, z: number},
+  device_orientation_failed: {error: string},
   device_orientation_started: void,
   device_orientation_stopped: void,
-  device_orientation_changed: { absolute: boolean, alpha: number, beta: number, gamma: number },
-  home_screen_failed: { error: string },
+  device_orientation_changed: {absolute: boolean, alpha: number, beta: number, gamma: number},
+  home_screen_failed: {error: string},
   home_screen_checked: {
     status: 'unsupported' | 'unknown' | 'added' | 'missed'
-  }
-  emoji_status_failed: { error: string },
+  },
+  emoji_status_failed: {error: string},
   emoji_status_set: void,
   emoji_status_access_requested: {
     status: 'allowed' | 'cancelled'
-  }
+  },
   location_checked: {
     available: boolean
     access_requested?: boolean
     access_granted?: boolean
-  }
-  location_requested: { available: false } | {
+  },
+  location_requested: {available: false} | {
     available: true,
     latitude: number,
     longitude: number,
@@ -444,43 +477,48 @@ export type TelegramWebViewSendEventMap = {
     vertical_accuracy: number,
     course_accuracy: number,
     speed_accuracy: number
-  }
+  },
   file_download_requested: {
     status: 'downloading' | 'cancelled'
-  }
+  },
   device_storage_key_saved: {
     req_id: string,
-  }
+  },
   device_storage_key_received: {
     req_id: string,
     value: string | null
-  }
+  },
   device_storage_cleared: {
     req_id: string,
-  }
+  },
   device_storage_failed: {
     req_id: string,
     error: 'KEY_INVALID' | 'VALUE_INVALID' | 'QUOTA_EXCEEDED' | 'UNKNOWN_ERROR'
-  }
+  },
   secure_storage_failed: {
     req_id: string,
     error: 'UNSUPPORTED'
-  }
-  fullscreen_changed: { is_fullscreen: boolean }
-  fullscreen_failed: { error: string }
-  visibility_changed: { is_visible: boolean }
+  },
+  fullscreen_changed: {is_fullscreen: boolean},
+  fullscreen_failed: {error: string},
+  visibility_changed: {is_visible: boolean},
   content_safe_area_changed: {
     top: number,
     left: number,
     right: number,
     bottom: number,
-  }
-  prepared_message_failed: { error: string }
-  gyroscope_failed: { error: string }
-  device_orientation_failed: { error: string }
-  accelerometer_failed: { error: string }
+  },
+  prepared_message_failed: {error: string},
+  requested_chat_sent: {req_id: string},
+  requested_chat_failed: {req_id: string, error?: string},
+  gyroscope_failed: {error: string},
+  device_orientation_failed: {error: string},
+  accelerometer_failed: {error: string},
   prepared_message_sent: void
 };
+
+export type LocalTextWithEntities = Pick<TextWithEntities, 'text' | 'entities'>;
+export type LocalTextWithOptionalEntities = Pick<TextWithEntities, 'text'> & Partial<Pick<TextWithEntities, 'entities'>>;
 
 // export type TelegramWebViewSendSerializedEvent<T extends keyof TelegramWebViewSendEventMap> = {
 //   eventType: T,

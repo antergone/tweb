@@ -1,21 +1,23 @@
-import {createRoot, createSignal, getOwner, runWithOwner} from 'solid-js';
+import {createSignal, getOwner, runWithOwner} from 'solid-js';
 
-import noop from '../../../helpers/noop';
+import deferredPromise from '@helpers/cancellablePromise';
+import noop from '@helpers/noop';
 
-import {useMediaEditorContext} from '../context';
-import {delay} from '../utils';
+import {useMediaEditorContext} from '@components/mediaEditor/context';
+import {delay} from '@components/mediaEditor/utils';
 
-import {FRAMES_PER_SECOND, STICKER_SIZE} from './constants';
-import {MediaEditorFinalResultPayload} from './createFinalResult';
-import drawStickerLayer from './drawStickerLayer';
-import drawTextLayer from './drawTextLayer';
-import {generateVideoPreview} from './generateVideoPreview';
-import {ScaledLayersAndLines} from './getScaledLayersAndLines';
-import ImageStickerFrameByFrameRenderer from './imageStickerFrameByFrameRenderer';
-import LottieStickerFrameByFrameRenderer from './lottieStickerFrameByFrameRenderer';
-import {StickerFrameByFrameRenderer} from './types';
-import VideoStickerFrameByFrameRenderer from './videoStickerFrameByFrameRenderer';
-import calcCodecAndBitrate, {BITRATE_TARGET_FPS} from './calcCodecAndBitrate';
+import {FRAMES_PER_SECOND, STICKER_SIZE} from '@components/mediaEditor/finalRender/constants';
+import {MediaEditorFinalResultPayload} from '@components/mediaEditor/finalRender/createFinalResult';
+import drawStickerLayer from '@components/mediaEditor/finalRender/drawStickerLayer';
+import drawTextLayer from '@components/mediaEditor/finalRender/drawTextLayer';
+import {generateVideoPreview} from '@components/mediaEditor/finalRender/generateVideoPreview';
+import {ScaledLayersAndLines} from '@components/mediaEditor/finalRender/getScaledLayersAndLines';
+import ImageStickerFrameByFrameRenderer from '@components/mediaEditor/finalRender/imageStickerFrameByFrameRenderer';
+import LottieStickerFrameByFrameRenderer from '@components/mediaEditor/finalRender/lottieStickerFrameByFrameRenderer';
+import {StickerFrameByFrameRenderer} from '@components/mediaEditor/finalRender/types';
+import VideoStickerFrameByFrameRenderer from '@components/mediaEditor/finalRender/videoStickerFrameByFrameRenderer';
+import createMp4VideoEncoder from '@components/mediaEditor/finalRender/createMp4VideoEncoder';
+import StickerType from '@config/stickerType';
 
 type Args = {
   scaledLayers: ScaledLayersAndLines['scaledLayers'];
@@ -39,18 +41,26 @@ export default async function renderToVideoGIF({
   const owner = getOwner();
   const context = useMediaEditorContext();
 
-  const {editorState: {pixelRatio}} = context;
+  const {editorState: {pixelRatio}, dontCreatePreview} = context;
 
-  const creationProgress = createRoot(dispose => {
-    const signal = createSignal(0);
-    return {signal, dispose};
-  });
-
-  const [, setProgress] = creationProgress.signal;
+  const creationProgress = createSignal(0);
+  const [, setProgress] = creationProgress;
 
   const renderers = new Map<number, StickerFrameByFrameRenderer>();
 
   let canceled = false;
+
+  const CANCELED = Symbol('canceled');
+  const canceledDeferred = deferredPromise<never>();
+  canceledDeferred.catch(noop);
+
+  function throwIfCanceled() {
+    if(canceled) throw CANCELED;
+  }
+
+  function raceCancel<T>(p: Promise<T>): Promise<T> {
+    return Promise.race([p, canceledDeferred]) as Promise<T>;
+  }
 
   async function renderFrame(encoder: VideoEncoder, frameNo: number) {
     const promises = Array.from(renderers.values()).map((renderer) =>
@@ -84,70 +94,70 @@ export default async function renderToVideoGIF({
   }
 
   const resultPromise = new Promise<MediaEditorFinalResultPayload>(async(resolve, reject) => {
-    let maxFrames = 0;
+    let encoder: VideoEncoder | undefined;
 
-    const [{ArrayBufferTarget, Muxer}] = await Promise.all([
-      import('mp4-muxer'),
-      ...scaledLayers.map(async(layer) => {
-        if(!layer.sticker) return;
+    const finishCanceled = () => {
+      if(encoder) {
+        try { cleanup(encoder); } catch{}
+      } else {
+        Array.from(renderers.values()).forEach((renderer) => {
+          try { renderer.destroy(); } catch{}
+        });
+      }
+      reject(CANCELED);
+    };
 
-        const stickerType = layer.sticker?.sticker;
-        let renderer: StickerFrameByFrameRenderer;
+    try {
+      let maxFrames = 0;
 
-        if(stickerType === 1) renderer = new ImageStickerFrameByFrameRenderer();
-        if(stickerType === 2) renderer = new LottieStickerFrameByFrameRenderer();
-        if(stickerType === 3) renderer = new VideoStickerFrameByFrameRenderer();
-        if(!renderer) return;
+      const [mp4Encoder] = await raceCancel(Promise.all([
+        createMp4VideoEncoder({width: scaledWidth, height: scaledHeight, frameRate: FRAMES_PER_SECOND}),
+        ...scaledLayers.map(async(layer) => {
+          if(!layer.sticker) return;
 
-        renderers.set(layer.id, renderer);
-        await renderer.init(layer.sticker!, STICKER_SIZE * layer.scale * pixelRatio);
-        maxFrames = Math.max(maxFrames, renderer.getTotalFrames());
-      }),
-      delay(200)
-    ]);
+          const stickerType = layer.sticker?.sticker;
+          let renderer: StickerFrameByFrameRenderer;
 
-    const muxer = new Muxer({
-      target: new ArrayBufferTarget(),
-      video: {
-        codec: 'avc',
-        width: scaledWidth,
-        height: scaledHeight,
-        frameRate: FRAMES_PER_SECOND
-      },
-      fastStart: 'in-memory'
-    });
+          if(stickerType === StickerType.Static) renderer = new ImageStickerFrameByFrameRenderer();
+          if(stickerType === StickerType.Lottie) renderer = new LottieStickerFrameByFrameRenderer();
+          if(stickerType === StickerType.WebM) renderer = new VideoStickerFrameByFrameRenderer();
+          if(!renderer) return;
 
-    const encoder = new VideoEncoder({
-      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-      error: (e) => console.error(e)
-    });
+          renderers.set(layer.id, renderer);
+          await renderer.init(layer.sticker!, STICKER_SIZE * layer.scale * pixelRatio);
+          maxFrames = Math.max(maxFrames, renderer.getTotalFrames());
+        }),
+        delay(200)
+      ]));
+      throwIfCanceled();
 
-    encoder.configure({
-      width: scaledWidth,
-      height: scaledHeight,
-      ...calcCodecAndBitrate(scaledWidth, scaledHeight, BITRATE_TARGET_FPS)
-    });
+      encoder = mp4Encoder.encoder;
 
-    for(let frameNo = 0; frameNo <= maxFrames; frameNo++) {
-      if(canceled) {
-        reject();
-        cleanup(encoder);
+      for(let frameNo = 0; frameNo <= maxFrames; frameNo++) {
+        throwIfCanceled();
+
+        await raceCancel(renderFrame(encoder, frameNo));
+        setProgress(frameNo / maxFrames);
       }
 
-      await renderFrame(encoder, frameNo);
-      setProgress(frameNo / maxFrames);
+      await raceCancel(encoder.flush());
+      throwIfCanceled();
+      const blob = await raceCancel(mp4Encoder.finalize());
+      throwIfCanceled();
+
+      cleanup(encoder);
+
+      resolve({
+        blob,
+        hasSound: false
+      });
+    } catch(e) {
+      if(e === CANCELED || canceled) {
+        finishCanceled();
+        return;
+      }
+      reject(e);
     }
-
-    await encoder.flush();
-    muxer.finalize();
-
-    cleanup(encoder);
-
-    const {buffer} = muxer.target;
-    resolve({
-      blob: new Blob([buffer], {type: 'video/mp4'}),
-      hasSound: false
-    });
   });
 
   let result: MediaEditorFinalResultPayload;
@@ -155,29 +165,16 @@ export default async function renderToVideoGIF({
   resultPromise.then((value) => (result = value)).catch(noop);
 
   return {
-    preview: await runWithOwner(owner, () => generateVideoPreview({scaledWidth, scaledHeight})),
+    preview: dontCreatePreview ? undefined : await runWithOwner(owner, () => generateVideoPreview({scaledWidth, scaledHeight})),
     isVideo: true,
     getResult: () => {
       return result ?? resultPromise;
     },
     cancel: () => {
+      if(canceled) return;
       canceled = true;
+      canceledDeferred.reject(CANCELED);
     },
     creationProgress
   };
-
-  // const div = document.createElement('div')
-  // div.style.position = 'fixed';
-  // div.style.zIndex = '1000';
-  // div.style.top = '50%';
-  // div.style.left = '50%';
-  // div.style.transform = 'translate(-50%, -50%)';
-  // const img = document.createElement('video')
-  // img.src = URL.createObjectURL(blob)
-  // img.controls = true
-  // img.autoplay = true
-  // img.loop = true
-  // img.style.maxWidth = '450px'
-  // div.append(img)
-  // document.body.append(div)
 }

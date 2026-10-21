@@ -1,11 +1,6 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MOUNT_CLASS_TO} from '../config/debug';
-import {_tgico} from '../helpers/tgico';
+import {MOUNT_CLASS_TO} from '@config/debug';
+import classNames from '@helpers/string/classNames';
+import {_tgico} from '@helpers/tgico';
 
 export function putPreloader(elem: Element, returnDiv = false): HTMLElement {
   const html = `
@@ -52,9 +47,9 @@ export function setButtonLoader(elem: HTMLButtonElement, icon: Icon = 'check') {
   });
 } */
 
-export function PreloaderTsx() {
+export function PreloaderTsx(props?: {class?: string}) {
   const div = document.createElement('div');
-  div.classList.add('preloader');
+  div.className = classNames('preloader', props?.class);
   putPreloader(div);
   return div;
 }

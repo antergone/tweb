@@ -1,13 +1,16 @@
 import {Component, createEffect, createMemo, createSelector, createSignal, For, JSX, onCleanup, onMount} from 'solid-js';
 import {Portal} from 'solid-js/web';
 import {Transition} from 'solid-transition-group';
+import {animateValue, simpleEasing} from '@helpers/animateValue';
+import buttonKeyDown from '@helpers/solid/buttonKeyDown';
+import Modes from '@config/modes';
+import {keepMe} from '@helpers/keepMe';
+import ListenerSetter from '@helpers/listenerSetter';
+import ripple from '@components/ripple';
+import styles from '@components/sidebarLeft/tabs/passcodeLock/inlineSelect.module.scss';
 
-import ListenerSetter from '../../../../helpers/listenerSetter';
+keepMe(ripple);
 
-import ripple from '../../../ripple'; ripple; // keep
-import {animateValue, simpleEasing} from '../../../mediaEditor/utils';
-
-import styles from './inlineSelect.module.scss';
 
 const InlineSelect: Component<{
   isOpen?: boolean;
@@ -49,6 +52,10 @@ const InlineSelect: Component<{
       // done();
       return;
     }
+
+    // Move focus to the currently-selected option so keyboard users can immediately
+    // arrow/activate within the listbox and Escape closes it.
+    if(Modes.a11y) (selectOptionEl as HTMLElement).focus({preventScroll: true});
 
     const valueRect = valueEl.getBoundingClientRect();
     const selectRect = selectEl.getBoundingClientRect();
@@ -144,10 +151,16 @@ const InlineSelect: Component<{
                 e.stopPropagation();
                 props.onClose?.();
               }}
+              onKeyDown={(e) => {
+                if(Modes.a11y && e.key === 'Escape') {
+                  e.stopPropagation();
+                  props.onClose?.();
+                }
+              }}
               onMouseMove={onMouseMove}
             >
               <div class={styles.SelectClip}>
-                <div class={styles.Select} ref={setSelectEl}>
+                <div class={styles.Select} ref={setSelectEl} role="listbox">
                   <For each={props.options}>
                     {(option) => (
                       <div
@@ -156,7 +169,11 @@ const InlineSelect: Component<{
                         classList={{
                           [styles.selected]: isSelected(option.value)
                         }}
+                        role="option"
+                        tabindex={Modes.a11y ? 0 : undefined}
+                        aria-selected={isSelected(option.value)}
                         onClick={[props.onChange, option.value]}
+                        onKeyDown={buttonKeyDown}
                       >
                         <span>{option.label()}</span>
                       </div>

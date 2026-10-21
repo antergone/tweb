@@ -1,11 +1,16 @@
 import {JSX, splitProps} from 'solid-js';
-import classNames from '../helpers/string/classNames';
-import {getIconContent} from './icon';
+import classNames from '@helpers/string/classNames';
+import {getIconContent} from '@components/icon';
+import {getIconMirrorClass} from '@/iconsReverse';
 
-export const IconTsx = (props: {icon: Icon} & JSX.HTMLAttributes<HTMLSpanElement>) => {
-  const [, rest] = splitProps(props, ['icon']);
+export type IconTsxProps = {
+  icon: Icon;
+} & JSX.HTMLAttributes<HTMLSpanElement>;
+
+export const IconTsx = (inProps: IconTsxProps) => {
+  const [props, rest] = splitProps(inProps, ['icon', 'class']);
   return (
-    <span {...rest} class={classNames('tgico', props.class)}>
+    <span aria-hidden="true" class={classNames('tgico', getIconMirrorClass(props.icon), props.class)} {...rest}>
       {getIconContent(props.icon)}
     </span>
   );

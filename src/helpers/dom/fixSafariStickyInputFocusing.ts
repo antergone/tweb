@@ -1,13 +1,7 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import IS_TOUCH_SUPPORTED from '../../environment/touchSupport';
-import {IS_MOBILE, IS_SAFARI} from '../../environment/userAgent';
-import findUpClassName from './findUpClassName';
-import fixSafariStickyInput from './fixSafariStickyInput';
+import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
+import {IS_MOBILE, IS_SAFARI} from '@environment/userAgent';
+import findUpClassName from '@helpers/dom/findUpClassName';
+import fixSafariStickyInput from '@helpers/dom/fixSafariStickyInput';
 
 export const IS_STICKY_INPUT_BUGGED = IS_SAFARI && IS_MOBILE && IS_TOUCH_SUPPORTED && false;
 

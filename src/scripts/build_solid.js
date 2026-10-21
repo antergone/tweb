@@ -75,7 +75,7 @@ function copyFolder(source, target) {
 const buildedSolidPath = path.join(__dirname, '../vendor/solid');
 deleteFolderRecursive(buildedSolidPath);
 copy.forEach((source) => {
-  const lastParts = source.split('/').slice(-5);
+  const lastParts = source.split(path.sep).slice(-5);
   for(let i = 0; i < lastParts.length; ++i) {
     if(lastParts[i] === 'packages') {
       lastParts.splice(0, i + 2);
@@ -90,12 +90,47 @@ copy.forEach((source) => {
 
   console.log(lastParts);
 
-  const target = path.join(buildedSolidPath, lastParts.join('/'));
+  const target = path.join(buildedSolidPath, lastParts.join(path.sep));
   if(fs.statSync(source).isDirectory()) {
     copyFolder(source, target);
   } else {
     copyFile(source, target);
   }
+});
+
+// Solid's upstream Portal creates its wrapper through the module-global
+// document. That breaks cross-realm mounts such as Document Picture-in-Picture:
+// the wrapper belongs to the tab even though the mount lives in the PiP
+// document. Keep this local fork patch reproducible whenever vendor/solid is
+// regenerated from the submodule.
+[
+  'web/dist/dev.cjs',
+  'web/dist/dev.js',
+  'web/dist/web.cjs',
+  'web/dist/web.js'
+].forEach((relativePath) => {
+  const filePath = path.join(buildedSolidPath, relativePath);
+  let source = fs.readFileSync(filePath, 'utf8');
+  const replacements = [[
+    '    const el = mount();\n    if (el instanceof HTMLHeadElement) {',
+    '    const el = mount();\n    const portalDocument = el.ownerDocument || document;\n    if (el.nodeName === "HEAD") {'
+  ], [
+    '      const container = createElement(props.isSVG ? "g" : "div", props.isSVG),',
+    '      const container = props.isSVG ? portalDocument.createElementNS(SVG_NAMESPACE, "g") : portalDocument.createElement("div"),'
+  ], [
+    '() => el.removeChild(container)',
+    '() => container.remove()'
+  ]];
+
+  replacements.forEach(([before, after]) => {
+    if(!source.includes(before)) {
+      throw new Error(`Unable to apply the cross-realm Portal patch to ${relativePath}`);
+    }
+
+    source = source.replace(before, after);
+  });
+
+  fs.writeFileSync(filePath, source);
 });
 
 // console.log(copy);

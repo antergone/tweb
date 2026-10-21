@@ -1,24 +1,18 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {ChatAutoDownloadSettings} from '../../helpers/autoDownload';
-import mediaSizes from '../../helpers/mediaSizes';
-import {Middleware} from '../../helpers/middleware';
-import {Document, Message, MessageMedia, Photo, PhotoSize} from '../../layer';
-import {AppManagers} from '../../lib/appManagers/managers';
-import getMediaFromMessage from '../../lib/appManagers/utils/messages/getMediaFromMessage';
-import choosePhotoSize from '../../lib/appManagers/utils/photos/choosePhotoSize';
-import rootScope from '../../lib/rootScope';
-import {AnimationItemGroup} from '../animationIntersector';
-import Chat from '../chat/chat';
-import LazyLoadQueue from '../lazyLoadQueue';
-import prepareAlbum from '../prepareAlbum';
-import wrapMediaSpoiler from './mediaSpoiler';
-import wrapPhoto from './photo';
-import wrapVideo from './video';
+import mediaSizes from '@helpers/mediaSizes';
+import {Middleware} from '@helpers/middleware';
+import {ChatAutoDownloadSettings} from '@hooks/useAutoDownloadSettings';
+import {Document, Message, MessageMedia, Photo, PhotoSize} from '@layer';
+import {AppManagers} from '@lib/managers';
+import getMediaFromMessage from '@appManagers/utils/messages/getMediaFromMessage';
+import choosePhotoSize from '@appManagers/utils/photos/choosePhotoSize';
+import rootScope from '@lib/rootScope';
+import {AnimationItemGroup} from '@components/animationIntersector';
+import Chat from '@components/chat/chat';
+import LazyLoadQueue from '@components/lazyLoadQueue';
+import prepareAlbum, {ALBUM_ITEM_SPACING} from '@components/prepareAlbum';
+import wrapMediaSpoiler from '@components/wrappers/mediaSpoiler';
+import wrapPhoto from '@components/wrappers/photo';
+import wrapVideo from '@components/wrappers/video';
 
 export default function wrapAlbum({messages, media, attachmentDiv, middleware, uploading, lazyLoadQueue, isOut, chat, loadPromises, autoDownload, managers = rootScope.managers, animationGroup, spoilered, videoTimes, uploadingFileName, sensitive}: {
   messages?: Message.message[],
@@ -61,7 +55,7 @@ export default function wrapAlbum({messages, media, attachmentDiv, middleware, u
     items: items.map((i) => ({w: i.size.w, h: i.size.h})),
     maxWidth: mediaSizes.active.album.width,
     minWidth: 100,
-    spacing: 1,
+    spacing: ALBUM_ITEM_SPACING,
     forMedia: true,
     noGroupedItem: !messages
   });

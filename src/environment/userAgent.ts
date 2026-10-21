@@ -1,10 +1,4 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import ctx from './ctx';
+import ctx from '@environment/ctx';
 
 export const USER_AGENT = navigator ? navigator.userAgent : null;
 export const IS_APPLE = navigator.userAgent.search(/OS X|iPhone|iPad|iOS/i) !== -1;

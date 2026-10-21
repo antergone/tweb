@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import forEachReverse from './array/forEachReverse';
-import safeAssign from './object/safeAssign';
+import forEachReverse from '@helpers/array/forEachReverse';
+import safeAssign from '@helpers/object/safeAssign';
 
 export type ListLoaderOptions<T extends {}, P extends {}> = {
   loadMore: ListLoader<T, P>['loadMore'],
@@ -92,6 +86,8 @@ export default class ListLoader<T extends {}, P extends {}> {
       this.next.unshift(...items);
     }
 
+    this.current = item;
+
     if(this.next.length < this.loadWhenLeft) {
       this.load(!this.reverse);
     }
@@ -100,7 +96,6 @@ export default class ListLoader<T extends {}, P extends {}> {
       this.load(this.reverse);
     }
 
-    this.current = item;
     dispatchJump && this.onJump?.(item, length > 0);
     return this.current;
   }
@@ -174,6 +169,9 @@ export default class ListLoader<T extends {}, P extends {}> {
       const processedArr: (Promise<any> | any)[] = [];
       const method = older && !this.reverse ? result.items.forEach.bind(result.items) : forEachReverse.bind(null, result.items);
       method((item: any) => {
+        // * the loader can return holes (a mid without a message behind it), don't feed them to processItem
+        if(!item) return;
+
         const processed = this.processItem ? this.processItem(item) : item;
 
         if(!processed) return;

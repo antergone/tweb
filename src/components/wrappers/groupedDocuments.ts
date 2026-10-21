@@ -1,23 +1,19 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import setInnerHTML from '../../helpers/dom/setInnerHTML';
-import {MediaSizeType} from '../../helpers/mediaSizes';
-import {Message} from '../../layer';
-import {AppManagers} from '../../lib/appManagers/managers';
-import getMediaDurationFromMessage from '../../lib/appManagers/utils/messages/getMediaDurationFromMessage';
-import wrapRichText from '../../lib/richTextProcessor/wrapRichText';
-import {MediaSearchContext} from '../appMediaPlaybackController';
-import Chat from '../chat/chat';
-import LazyLoadQueue from '../lazyLoadQueue';
-import TranslatableMessage from '../translatableMessage';
-import wrapDocument from './document';
+import setInnerHTML from '@helpers/dom/setInnerHTML';
+import {MediaSizeType} from '@helpers/mediaSizes';
+import {Message} from '@layer';
+import {AppManagers} from '@lib/managers';
+import getMediaDurationFromMessage from '@appManagers/utils/messages/getMediaDurationFromMessage';
+import wrapRichText from '@lib/richTextProcessor/wrapRichText';
+import {MediaSearchContext} from '@components/appMediaPlaybackController';
+import Chat from '@components/chat/chat';
+import LazyLoadQueue from '@components/lazyLoadQueue';
+import TranslatableMessage from '@components/translatableMessage';
+import wrapDocument from '@components/wrappers/document';
+import {Middleware} from '@helpers/middleware';
 
 export default async function wrapGroupedDocuments({
   albumMustBeRenderedFull,
+  middleware,
   message,
   bubble,
   messageDiv,
@@ -35,10 +31,12 @@ export default async function wrapGroupedDocuments({
   richTextOptions,
   canTranscribeVoice,
   translatableParams,
+  createMessageText,
   factCheckBox,
   isOut
 }: {
   albumMustBeRenderedFull: boolean,
+  middleware: Middleware,
   message: any,
   messageDiv: HTMLElement,
   bubble: HTMLElement,
@@ -54,9 +52,10 @@ export default async function wrapGroupedDocuments({
   fontWeight?: number,
   fontSize?: number,
   richTextFragment?: DocumentFragment | HTMLElement,
-  richTextOptions?: Parameters<typeof wrapRichText>[1]
+  richTextOptions?: Parameters<typeof wrapRichText>[1],
   canTranscribeVoice?: boolean,
   translatableParams: Parameters<typeof TranslatableMessage>[0],
+  createMessageText?: (element: HTMLElement, message: Message.message) => void,
   factCheckBox?: HTMLElement,
   isOut?: boolean
 }) {
@@ -71,6 +70,7 @@ export default async function wrapGroupedDocuments({
     const message = chat.getMessageByPeer(peerId, mid) as Message.message;
     const div = await wrapDocument({
       message,
+      middleware,
       loadPromises,
       autoDownloadSize,
       lazyLoadQueue,
@@ -105,27 +105,31 @@ export default async function wrapGroupedDocuments({
     }
 
     if(message.message) {
-      let fragment = richTextFragment;
-      if(!fragment) {
-        if(translatableParams) {
-          fragment = TranslatableMessage({
-            ...translatableParams,
-            message,
-            richTextOptions: {
-              ...translatableParams.richTextOptions,
+      if(createMessageText) {
+        createMessageText(messageDiv, message);
+      } else {
+        let fragment = richTextFragment;
+        if(!fragment) {
+          if(translatableParams) {
+            fragment = TranslatableMessage({
+              ...translatableParams,
+              message,
+              richTextOptions: {
+                ...translatableParams.richTextOptions,
+                maxMediaTimestamp: getMediaDurationFromMessage(message)
+              }
+            });
+          } else {
+            fragment = wrapRichText(message.message, {
+              ...richTextOptions,
+              entities: message.totalEntities,
               maxMediaTimestamp: getMediaDurationFromMessage(message)
-            }
-          });
-        } else {
-          fragment = wrapRichText(message.message, {
-            ...richTextOptions,
-            entities: message.totalEntities,
-            maxMediaTimestamp: getMediaDurationFromMessage(message)
-          });
+            });
+          }
         }
-      }
 
-      setInnerHTML(messageDiv, fragment);
+        setInnerHTML(messageDiv, fragment);
+      }
     }
 
     if(factCheckBox && messageDiv && isLast) {

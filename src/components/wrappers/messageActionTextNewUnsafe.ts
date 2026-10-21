@@ -1,33 +1,35 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import indexOfAndSplice from '../../helpers/array/indexOfAndSplice';
-import {formatTime, ONE_DAY} from '../../helpers/date';
-import htmlToSpan from '../../helpers/dom/htmlToSpan';
-import setInnerHTML, {setDirection} from '../../helpers/dom/setInnerHTML';
-import {wrapCallDuration} from './wrapDuration';
-import paymentsWrapCurrencyAmount from '../../helpers/paymentsWrapCurrencyAmount';
-import {ForumTopic, Message, MessageAction, MessageEntity, MessageMedia, MessageReplyHeader, StarGift, TextWithEntities} from '../../layer';
-import getPeerId from '../../lib/appManagers/utils/peers/getPeerId';
-import I18n, {FormatterArgument, FormatterArguments, i18n, join, langPack, LangPackKey, _i18n} from '../../lib/langPack';
-import {GENERAL_TOPIC_ID} from '../../lib/mtproto/mtproto_config';
-import wrapEmojiText from '../../lib/richTextProcessor/wrapEmojiText';
-import wrapPlainText from '../../lib/richTextProcessor/wrapPlainText';
-import wrapRichText from '../../lib/richTextProcessor/wrapRichText';
-import rootScope from '../../lib/rootScope';
-import topicAvatar from '../topicAvatar';
-import {wrapCustomEmojiAwaited} from './customEmoji';
-import getPeerTitle from './getPeerTitle';
-import wrapJoinVoiceChatAnchor from './joinVoiceChatAnchor';
-import {WrapMessageActionTextOptions} from './messageActionTextNew';
-import wrapMessageForReply, {WrapMessageForReplyOptions} from './messageForReply';
-import wrapPeerTitle from './peerTitle';
-import shouldDisplayGiftCodeAsGift from '../../helpers/shouldDisplayGiftCodeAsGift';
-import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
-import Icon from '../icon';
+import indexOfAndSplice from '@helpers/array/indexOfAndSplice';
+import {formatTime, ONE_DAY} from '@helpers/date';
+import htmlToSpan from '@helpers/dom/htmlToSpan';
+import setInnerHTML, {setDirection} from '@helpers/dom/setInnerHTML';
+import {wrapCallDuration} from '@components/wrappers/wrapDuration';
+import paymentsWrapCurrencyAmount from '@helpers/paymentsWrapCurrencyAmount';
+import {ForumTopic, Message, MessageAction, MessageEntity, MessageMedia, MessageReplyHeader, StarGift, TextWithEntities} from '@layer';
+import getPeerId from '@appManagers/utils/peers/getPeerId';
+import I18n, {FormatterArgument, FormatterArguments, i18n, join, langPack, LangPackKey, _i18n} from '@lib/langPack';
+import {GENERAL_TOPIC_ID} from '@appManagers/constants';
+import wrapEmojiText from '@lib/richTextProcessor/wrapEmojiText';
+import wrapPlainText from '@lib/richTextProcessor/wrapPlainText';
+import wrapRichText from '@lib/richTextProcessor/wrapRichText';
+import rootScope from '@lib/rootScope';
+import topicAvatar from '@components/topicAvatar';
+import {wrapCustomEmojiAwaited} from '@components/wrappers/customEmoji';
+import getPeerTitle from '@components/wrappers/getPeerTitle';
+import wrapJoinVoiceChatAnchor from '@components/wrappers/joinVoiceChatAnchor';
+import {getConferenceCallLangKey, getConferenceCallState} from '@lib/calls/helpers/conferenceCallAction';
+import {WrapMessageActionTextOptions} from '@components/wrappers/messageActionTextNew';
+import wrapMessageForReply, {WrapMessageForReplyOptions} from '@components/wrappers/messageForReply';
+import wrapPeerTitle from '@components/wrappers/peerTitle';
+import shouldDisplayGiftCodeAsGift from '@helpers/shouldDisplayGiftCodeAsGift';
+import apiManagerProxy from '@lib/apiManagerProxy';
+import Icon from '@components/icon';
+import {getPriceChangedActionMessageLangParams, getStarGiftActionLangParams} from '@lib/lang';
+import {numberThousandSplitterForStars} from '@helpers/number/numberThousandSplitter';
+import {getCollectibleName} from '@appManagers/utils/gifts/getCollectibleName';
+import {truncateTextWithEntities} from '@lib/richTextProcessor/truncateTextWithEntities';
+import getCommunityServiceMessageKey, {
+  getCommunityServiceTitle
+} from '@components/wrappers/getCommunityServiceMessageKey';
 
 async function wrapLinkToMessage(options: WrapMessageForReplyOptions) {
   const wrapped = await wrapMessageForReply(options);
@@ -87,7 +89,9 @@ const TODO_JOIN_OPTIONS: Parameters<typeof joinTexts>[1] = {
     b.append(el);
     return b;
   }
-}
+};
+
+const MAX_ANSWER_TEXT_LENGTH = 20;
 
 type WrapTopicIconOptions = {
   topic: Pick<ForumTopic.forumTopic, 'icon_color' | 'icon_emoji_id' | 'title' | 'id'>,
@@ -206,7 +210,18 @@ export default async function wrapMessageActionTextNewUnsafe(options: WrapMessag
     const managers = rootScope.managers;
 
     const getNameDivHTML = (peerId: PeerId, plain: boolean) => {
-      return plain ? getPeerTitle({peerId, plainText: plain}) : wrapPeerTitle({peerId});
+      // a name in a service message opens its peer on click (onBubblesClick): a link to it
+      return plain ? getPeerTitle({peerId, plainText: plain}) : wrapPeerTitle({peerId, link: !noLinks});
+    };
+
+    const wrapTruncatedText = (text: string, entities: MessageEntity[] | undefined, maxLength: number) => {
+      const truncated = truncateTextWithEntities(text, entities, maxLength);
+
+      if(plain) {
+        return wrapPlainText(truncated.text, truncated.entities);
+      } else {
+        return htmlToSpan(wrapEmojiText(truncated.text, false, truncated.entities));
+      }
     };
 
     const getSeveralNameDivHTML = async(peerIds: PeerId[], plain: boolean) => {
@@ -271,6 +286,20 @@ export default async function wrapMessageActionTextNewUnsafe(options: WrapMessag
         break;
       }
 
+      case 'messageActionConferenceCall': {
+        // Same title tdesktop's `MediaCall::Text` produces for the call bubble
+        // (rendered by `wrapCallBubble`) — here it serves the plain-text uses:
+        // chat list previews, replies, notifications, and the fallback for
+        // browsers that render the action as a service message because they
+        // cannot join a group call at all.
+        langPackKey = getConferenceCallLangKey(
+          getConferenceCallState(action),
+          !!message.pFlags.out
+        );
+        args = [];
+        break;
+      }
+
       case 'messageActionGroupCallScheduled': {
         const today = new Date();
         const date = new Date(action.schedule_date * 1000);
@@ -321,6 +350,43 @@ export default async function wrapMessageActionTextNewUnsafe(options: WrapMessag
           args = [getNameDivHTML(message.fromId, plain)];
         }
 
+        break;
+      }
+
+      case 'messageActionGameScore': {
+        const fromMe = message.fromId === rootScope.myId;
+        args = [];
+        if(!fromMe) {
+          args.push(getNameDivHTML(message.fromId, plain));
+        }
+        args.push('' + action.score);
+
+        let gameTitle: string | undefined;
+        if(message.reply_to_mid) {
+          const gameMessage = await managers.appMessagesManager.getMessageByPeer(message.peerId, message.reply_to_mid);
+          const media = (gameMessage as Message.message)?.media;
+          if(media?._ === 'messageMediaGame' && media.game?._ === 'game') {
+            gameTitle = media.game.title;
+          } else if(!gameMessage) {
+            managers.appMessagesManager.fetchMessageReplyTo(message);
+          }
+        }
+
+        if(gameTitle) {
+          if(plain) {
+            args.push(wrapSomeText(gameTitle, plain));
+          } else {
+            const link = document.createElement('i');
+            link.classList.add('is-game-link');
+            link.dataset.savedFrom = message.peerId + '_' + message.reply_to_mid;
+            link.append(wrapSomeText(gameTitle, false));
+            setDirection(link);
+            args.push(link);
+          }
+          langPackKey = fromMe ? 'ActionYouScoredInGame' : 'ActionUserScoredInGame';
+        } else {
+          langPackKey = fromMe ? 'ActionYouScored' : 'ActionUserScored';
+        }
         break;
       }
 
@@ -380,6 +446,15 @@ export default async function wrapMessageActionTextNewUnsafe(options: WrapMessag
       case 'messageActionChannelEditVideo':
       case 'messageActionChannelDeletePhoto': {
         args = [getNameDivHTML(message.fromId, plain)];
+        break;
+      }
+
+      case 'messageActionSuggestProfilePhoto': {
+        const isOutgoing = message.fromId === rootScope.myId;
+        langPackKey = isOutgoing ?
+          'Action.YouSuggestedProfilePhoto' :
+          'Action.SuggestedProfilePhoto';
+        args = isOutgoing ? [getNameDivHTML(message.peerId, plain)] : [getNameDivHTML(message.fromId, plain)];
         break;
       }
 
@@ -485,7 +560,7 @@ export default async function wrapMessageActionTextNewUnsafe(options: WrapMessag
             langPackKey = 'ActionTTLYouChanged';
           } else {
             langPackKey = 'ActionTTLChanged';
-            args.push(getNameDivHTML(message.fromId, plain));
+            args.push(await getNameDivHTML(message.fromId, plain));
           }
 
           let duration: ReturnType<typeof wrapCallDuration>;
@@ -586,8 +661,11 @@ export default async function wrapMessageActionTextNewUnsafe(options: WrapMessag
 
         args = authorElement ? [authorElement] : [];
 
-        if(action.emoticon) {
-          args.push(wrapSomeText(action.emoticon, plain));
+        const theme = action.theme;
+        if(theme._ === 'chatThemeUniqueGift') {
+          // * unsupported now
+        } else if(theme.emoticon) {
+          args.push(wrapSomeText(theme.emoticon, plain));
           langPackKey = isMe ? 'ChatThemeChangedYou' : 'ChatThemeChangedTo';
         } else {
           langPackKey = isMe ? 'ChatThemeDisabledYou' : 'ChatThemeDisabled';
@@ -602,6 +680,7 @@ export default async function wrapMessageActionTextNewUnsafe(options: WrapMessag
 
       case 'messageActionGiftStars':
       case 'messageActionGiftCode':
+      case 'messageActionGiftTon':
       case 'messageActionGiftPremium': {
         const isGiftCode = action._ === 'messageActionGiftCode';
         if(isGiftCode && !shouldDisplayGiftCodeAsGift(action)) {
@@ -691,9 +770,10 @@ export default async function wrapMessageActionTextNewUnsafe(options: WrapMessag
       }
 
       case 'messageActionPaidMessagesPrice': {
-        const isFree = !+action.stars;
-        langPackKey = isFree ? 'PaidMessages.GroupPriceChangedFree' : 'PaidMessages.GroupPriceChanged';
-        args = [+action.stars];
+        const isBroadcast = await managers.appChatsManager.isBroadcast(message.fromId?.toChatId());
+        const result = await getPriceChangedActionMessageLangParams(action, isBroadcast, () => getNameDivHTML(message.fromId, plain));
+        langPackKey = result.langPackKey;
+        args = result.args;
         break;
       }
 
@@ -703,22 +783,18 @@ export default async function wrapMessageActionTextNewUnsafe(options: WrapMessag
         break;
       }
       case 'messageActionStarGift':
-        if(message.pFlags.out) {
-          langPackKey = 'StarGiftSentMessageOutgoing';
-          args = [(action.gift as StarGift.starGift).stars];
-        } else {
-          langPackKey = 'StarGiftSentMessageIncoming';
-          args = [getNameDivHTML(message.fromId, plain), (action.gift as StarGift.starGift).stars];
-        }
+      case 'messageActionStarGiftUnique': {
+        const params = getStarGiftActionLangParams({
+          message,
+          action,
+          myId: rootScope.myId,
+          peerTitle: (peerId) => getNameDivHTML(peerId, plain)
+        });
+
+        langPackKey = params.langPackKey;
+        args = params.args;
         break;
-      case 'messageActionStarGiftUnique':
-        if(action.pFlags.upgrade) {
-          langPackKey = message.pFlags.out ? 'ActionGiftUpgradedOutbound' : 'ActionGiftUpgradedInbound'
-        } else {
-          langPackKey = message.pFlags.out ? 'ActionGiftTransferredOutbound' : 'ActionGiftTransferredInbound'
-        }
-        args = [getNameDivHTML(message.peerId, plain)];
-        break;
+      }
 
       case 'messageActionTodoAppendTasks': {
         let listMsg = await managers.appMessagesManager.getMessageByPeer(message.peerId, message.reply_to_mid);
@@ -792,6 +868,230 @@ export default async function wrapMessageActionTextNewUnsafe(options: WrapMessag
           ];
         }
 
+        break;
+      }
+      case 'messageActionChannelCreate': {
+        const chat = message?.peerId ? apiManagerProxy.getChat(message.peerId) : undefined;
+
+        if(chat?._ === 'channel' && chat?.pFlags?.monoforum) langPackKey = 'ActionCreateDirectMessages';
+
+        break;
+      }
+      case 'messageActionSuggestedPostApproval': {
+        if(action.pFlags.balance_too_low) {
+          langPackKey = 'SuggestedPosts.BalanceTooLow';
+          args = [wrapEmojiText('❌')];
+        } else if(action.pFlags.rejected) {
+          langPackKey = 'SuggestedPosts.GenericRejectedPost';
+          args = [wrapEmojiText('❌')];
+        } else {
+          langPackKey = 'SuggestedPosts.AgreementReached';
+          args = [wrapEmojiText('🤝')];
+        }
+        break;
+      }
+      case 'messageActionSuggestedPostSuccess': {
+        langPackKey = 'SuggestedPosts.PostSuccess';
+        args = [wrapEmojiText('✅'), i18n('Stars', [numberThousandSplitterForStars(action.price.amount)])];
+        break;
+      }
+      case 'messageActionSuggestedPostRefund': {
+        langPackKey = 'SuggestedPosts.GenericRefund';
+        break;
+      }
+      case 'messageActionSuggestBirthday': {
+        langPackKey = message.pFlags.out ? 'BirthdaySuggestOutgoing' : 'BirthdaySuggestIncoming';
+        args = [getNameDivHTML(message.peerId, plain)];
+
+        break
+      }
+      case 'messageActionStarGiftPurchaseOffer': {
+        langPackKey = message.pFlags.out ? 'StarGiftOffer.Outgoing' : 'StarGiftOffer.Incoming';
+        args = [
+          getNameDivHTML(message.peerId, plain),
+          i18n('Stars', [numberThousandSplitterForStars(action.price.amount)]),
+          getCollectibleName(action.gift as StarGift.starGiftUnique)
+        ];
+        break;
+      }
+      case 'messageActionStarGiftPurchaseOfferDeclined':
+        if(action.pFlags.expired) {
+          langPackKey = 'StarGiftOffer.ExpiredFull';
+        } else {
+          langPackKey = message.pFlags.out ? 'StarGiftOffer.RejectedFullOutgoing' : 'StarGiftOffer.RejectedFullIncoming';
+        }
+        args = [
+          getNameDivHTML(message.peerId, plain),
+          i18n('Stars', [numberThousandSplitterForStars(action.price.amount)]),
+          getCollectibleName(action.gift as StarGift.starGiftUnique)
+        ];
+        break;
+      case 'messageActionNewCreatorPending': {
+        langPackKey = 'Chat.Service.NewCreatorPending';
+        args = [
+          getNameDivHTML(action.new_creator_id.toPeerId(), plain),
+          getNameDivHTML(message.fromId, plain)
+        ];
+        break;
+      }
+      case 'messageActionChangeCreator': {
+        langPackKey = 'Chat.Service.ChangeCreator';
+        args = [
+          getNameDivHTML(message.fromId, plain),
+          getNameDivHTML(action.new_creator_id.toPeerId(), plain)
+        ];
+        break;
+      }
+      case 'messageActionBoostApply': {
+        langPackKey = 'UserBoostedGroup';
+        args = [
+          getNameDivHTML(message.fromId, plain),
+          action.boosts
+        ];
+        break;
+      }
+      case 'messageActionNoForwardsToggle': {
+        if(action.new_value === action.prev_value) {
+          langPackKey = action.new_value ? 'SharingStillEnabled' : 'SharingStillDisabled';
+        } else {
+          langPackKey = `Chat.Service.NoForwardsToggle${message.pFlags.out ? '.You' : ''}.${action.new_value ? 'Enabled' : 'Disabled'}` as const;
+        }
+        args = [getNameDivHTML(message.fromId, plain)];
+        break;
+      }
+      case 'messageActionNoForwardsRequest': {
+        if(action.pFlags.expired) {
+          langPackKey = 'EnableSharingRequested.Expired';
+        } else {
+          langPackKey = `Chat.Service.NoForwardsRequest${message.pFlags.out ? '.You' : ''}.${action.new_value ? 'Enable' : 'Disable'}` as const;
+          args = [getNameDivHTML(message.fromId, plain)];
+        }
+        break;
+      }
+      case 'messageActionPollAppendAnswer': {
+        const truncatedAnswerText = wrapTruncatedText(action.answer.text.text, action.answer.text.entities, MAX_ANSWER_TEXT_LENGTH);
+
+        if(message.pFlags.out) {
+          langPackKey = 'Chat.Poll.OptionAddedMe';
+          args = [truncatedAnswerText];
+        } else {
+          langPackKey = 'Chat.Poll.OptionAdded';
+          args = [getNameDivHTML(message.fromId, plain), truncatedAnswerText];
+        }
+        break;
+      }
+      case 'messageActionPollDeleteAnswer': {
+        const truncatedAnswerText = wrapTruncatedText(action.answer.text.text, action.answer.text.entities, MAX_ANSWER_TEXT_LENGTH);
+        if(message.pFlags.out) {
+          langPackKey = 'Chat.Poll.OptionDeletedMe';
+          args = [truncatedAnswerText];
+        } else {
+          langPackKey = 'Chat.Poll.OptionDeleted';
+          args = [getNameDivHTML(message.fromId, plain), truncatedAnswerText];
+        }
+        break;
+      }
+      case 'messageActionManagedBotCreated': {
+        langPackKey = 'CreateBot.BotWasCreated';
+        args = [getNameDivHTML(action.bot_id.toPeerId(), plain)];
+        break;
+      }
+      // layer 229: someone joined this group through a community it belongs to. Rendered like
+      // tdesktop's `lng_action_user_joined_via_community` — the joiner plus a link to the
+      // community, falling back to the community-less wording when the chat is not known yet.
+      case 'messageActionChatJoinedViaCommunity': {
+        const communityId = action.community_id &&
+          action.community_id !== '0' &&
+          action.community_id !== 0 ?
+          action.community_id.toChatId() :
+          undefined;
+        const community = communityId ?
+          apiManagerProxy.getChat(communityId) :
+          undefined;
+        const communityTitle = getCommunityServiceTitle(community);
+
+        args = [getNameDivHTML(message.fromId, plain)];
+
+        if(communityTitle) {
+          langPackKey = 'Chat.Service.JoinedViaCommunity';
+
+          if(plain) {
+            args.push(communityTitle);
+          } else if(noLinks) {
+            const bold = document.createElement('b');
+            bold.textContent = communityTitle;
+            args.push(bold);
+          } else {
+            args.push(getNameDivHTML(communityId.toPeerId(true), plain));
+          }
+        } else {
+          langPackKey = 'Chat.Service.JoinedViaCommunity.Unknown';
+        }
+
+        break;
+      }
+      case 'messageActionChangeCommunity': {
+        const communityId = action.community_id &&
+          action.community_id !== '0' &&
+          action.community_id !== 0 ?
+          action.community_id.toChatId() :
+          undefined;
+        const community = communityId ?
+          apiManagerProxy.getChat(communityId) :
+          undefined;
+        const communityTitle = getCommunityServiceTitle(community);
+        const peer = apiManagerProxy.getPeer(message.peerId);
+        const peerKind = message.peerId.isUser() ?
+          'bot' as const :
+          (
+            (
+              peer?._ === 'channel' ||
+              peer?._ === 'channelForbidden'
+            ) && !peer.pFlags.megagroup ?
+              'channel' as const :
+              'group' as const
+          );
+        const authorKind = message.fromId === rootScope.myId ?
+          'self' as const :
+          (message.fromId?.isUser() ? 'user' as const : 'unknown' as const);
+
+        langPackKey = getCommunityServiceMessageKey({
+          isAdded: !!communityId,
+          peerKind,
+          authorKind
+        });
+
+        args = [];
+        if(
+          peerKind === 'group' &&
+          authorKind !== 'self' &&
+          (!communityId || authorKind === 'user')
+        ) {
+          if(authorKind === 'unknown') {
+            args.push('');
+          } else if(noLinks && !plain) {
+            args.push(getPeerTitle({
+              peerId: message.fromId,
+              plainText: true
+            }).then((title) => {
+              const bold = document.createElement('b');
+              bold.textContent = title;
+              return bold;
+            }));
+          } else {
+            args.push(getNameDivHTML(message.fromId, plain));
+          }
+        }
+
+        if(communityId) {
+          if(plain) {
+            args.push(communityTitle || '');
+          } else {
+            const bold = document.createElement('b');
+            bold.textContent = communityTitle || '';
+            args.push(bold);
+          }
+        }
         break;
       }
       default:

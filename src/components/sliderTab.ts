@@ -1,18 +1,14 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import EventListenerBase, {EventListenerListeners} from '../helpers/eventListenerBase';
-import ListenerSetter from '../helpers/listenerSetter';
-import {getMiddleware, MiddlewareHelper} from '../helpers/middleware';
-import noop from '../helpers/noop';
-import {AppManagers} from '../lib/appManagers/managers';
-import {i18n, LangPackKey} from '../lib/langPack';
-import ButtonIcon from './buttonIcon';
-import Scrollable from './scrollable';
-import SidebarSlider from './slider';
+import EventListenerBase, {EventListenerListeners} from '@helpers/eventListenerBase';
+import deferredPromise, {CancellablePromise} from '@helpers/cancellablePromise';
+import ListenerSetter from '@helpers/listenerSetter';
+import {getMiddleware, MiddlewareHelper} from '@helpers/middleware';
+import noop from '@helpers/noop';
+import {AppManagers} from '@lib/managers';
+import {i18n, LangPackKey} from '@lib/langPack';
+import ButtonIcon from '@components/buttonIcon';
+import Scrollable from '@components/scrollable';
+import SidebarSlider from '@components/slider';
+import updateScrollRegionFocusable from '@helpers/dom/scrollRegion';
 
 export interface SliderSuperTabConstructable<T extends SliderSuperTab = any> {
   new(slider: SidebarSlider, destroyable: boolean): T;
@@ -24,6 +20,7 @@ export interface SliderSuperTabEventableConstructable {
 
 export default class SliderSuperTab {
   public static getInitArgs?(...args: any[]): any;
+  public static noSame?: boolean;
 
   public container: HTMLElement;
 
@@ -42,6 +39,19 @@ export default class SliderSuperTab {
   public middlewareHelper: MiddlewareHelper;
 
   public isConfirmationNeededOnClose: () => void | boolean | Promise<any>; // should return boolean instantly or `Promise` from `confirmationPopup`
+
+  /**
+   * Resolves once the tab has finished sliding in. `open()` awaits the render,
+   * the transition runs after it — the slider resolves this when it is over.
+   */
+  public shown: CancellablePromise<void> = deferredPromise<void>();
+
+  /** A reopened tab slides in again, so what waits on `shown` has to wait anew. */
+  public resetShown() {
+    if(this.shown.isFulfilled) {
+      this.shown = deferredPromise<void>();
+    }
+  }
 
   constructor(slider: SidebarSlider, destroyable?: boolean) {
     this._constructor(slider, destroyable);
@@ -69,6 +79,8 @@ export default class SliderSuperTab {
     this.content.classList.add('sidebar-content');
 
     this.scrollable = new Scrollable(this.content, undefined, undefined, true);
+    // Whether this panel's scroller is a tab stop depends on what it ends up
+    // holding, so it is decided in open() once the content exists.
     this.scrollable.attachBorderListeners(this.container);
 
     this.container.append(this.header, this.content);
@@ -95,6 +107,8 @@ export default class SliderSuperTab {
         console.error('open tab error', err);
       }
     }
+
+    updateScrollRegionFocusable(this.scrollable.container, this.title.textContent);
 
     this.slider.selectTab(this);
   }

@@ -1,10 +1,4 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import bufferConcats from '../helpers/bytes/bufferConcats';
+import bufferConcats from '@helpers/bytes/bufferConcats';
 
 Uint8Array.prototype.concat = function(...args: Array<Uint8Array | ArrayBuffer | number[]>) {
   return bufferConcats(this, ...args);
@@ -31,11 +25,7 @@ declare global {
   interface Uint8Array {
     concat: (...args: Array<Uint8Array | ArrayBuffer | number[]>) => Uint8Array,
     // toString: () => string,
-    toJSON: () => number[],
+    toJSON: () => number[] | {type: string, data: number[]},
     // toJSON: () => {type: 'bytes', value: number[]},
-  }
-
-  interface Promise<T> {
-    finally: (onfinally?: () => void) => Promise<T>;
   }
 }

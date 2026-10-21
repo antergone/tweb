@@ -1,12 +1,13 @@
-import {Component} from 'solid-js';
+import {Component, createMemo} from 'solid-js';
 
-import {numberThousandSplitterForStars} from '../../../../../helpers/number/numberThousandSplitter';
-import accumulate from '../../../../../helpers/array/accumulate';
-import clamp from '../../../../../helpers/number/clamp';
-import nMap from '../../../../../helpers/number/nMap';
-import {i18n} from '../../../../../lib/langPack';
+import {numberThousandSplitterForStars} from '@helpers/number/numberThousandSplitter';
+import accumulate from '@helpers/array/accumulate';
+import clamp from '@helpers/number/clamp';
+import nMap from '@helpers/number/nMap';
+import {i18n} from '@lib/langPack';
 
-import styles from './starsRangeInput.module.scss';
+import styles from '@components/sidebarLeft/tabs/privacy/messages/starsRangeInput.module.scss';
+import onRangeInlineArrowKey from '@helpers/dom/onRangeInlineArrowKey';
 
 
 const starsPerUnits: [units: number, stars: number][] = [
@@ -53,13 +54,16 @@ function starsToUnits(stars: number) {
 const StarRangeInput: Component<{
   value: number;
   onChange: (value: number) => void;
+  startFromZero?: boolean;
 }> = (props) => {
-  const units = () => clamp(starsToUnits(props.value), 1, totalUnits);
+  const min = createMemo(() => props.startFromZero ? 0 : 1);
 
-  const normalizedValue = () => nMap(units(), 1, totalUnits, 0, 1);
+  const units = () => clamp(starsToUnits(props.value), min(), totalUnits);
 
-  const onInput = (e: InputEvent & { currentTarget: HTMLInputElement }) => {
-    const clampedValue = clamp(e.currentTarget.valueAsNumber, 1, totalUnits)
+  const normalizedValue = () => nMap(units(), min(), totalUnits, 0, 1);
+
+  const onInput = (e: InputEvent & {currentTarget: HTMLInputElement}) => {
+    const clampedValue = clamp(e.currentTarget.valueAsNumber, min(), totalUnits)
     const newValue = Math.round(unitsToStars(clampedValue));
 
     props.onChange(newValue);
@@ -74,7 +78,7 @@ const StarRangeInput: Component<{
       }}
     >
       <div class={styles.Row}>
-        <div class={styles.Limit}>1</div>
+        <div class={styles.Limit}>{min()}</div>
         <div class={styles.Value}>{i18n('Stars', [
           numberThousandSplitterForStars(parseInt(props.value.toFixed(0)))
         ])}</div>
@@ -83,11 +87,12 @@ const StarRangeInput: Component<{
       <div class={styles.InputWrapper}>
         <input
           type="range"
-          min={1}
+          min={min()}
           max={totalUnits}
           step={1}
           value={units()}
           onInput={onInput}
+          onKeyDown={onRangeInlineArrowKey}
         />
         <div class={styles.Background} />
         <div class={styles.Thumb} />

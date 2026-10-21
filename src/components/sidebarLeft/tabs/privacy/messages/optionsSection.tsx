@@ -1,18 +1,12 @@
-import {Component} from 'solid-js';
+import {Component, Show} from 'solid-js';
 import {SetStoreFunction} from 'solid-js/store';
 import {Transition} from 'solid-transition-group';
-
-import {useHotReloadGuard} from '../../../../../lib/solidjs/hotReloadGuard';
-import anchorCallback from '../../../../../helpers/dom/anchorCallback';
-import {i18n} from '../../../../../lib/langPack';
-
-import {hideToast, toastNew} from '../../../../toast';
-import StaticRadio from '../../../../staticRadio';
-import Section from '../../../../section';
-import RowTsx from '../../../../rowTsx';
-
-import {MessagesPrivacyOption, MessagesTabStateStore, TRANSITION_TIME} from './config';
-import useIsPremium from './useIsPremium';
+import anchorCallback from '@helpers/dom/anchorCallback';
+import {useHotReloadGuard} from '@lib/solidjs/hotReloadGuard';
+import {LangPackKey} from '@lib/langPack';
+import RadioFieldTsx from '@components/radioFieldTsx';
+import Section from '@components/section';
+import {MessagesPrivacyOption, MessagesTabStateStore, TRANSITION_TIME} from '@components/sidebarLeft/tabs/privacy/messages/config';
 
 
 const DEFAULT_STARS_AMOUNT = 10;
@@ -23,25 +17,59 @@ const OptionsSection: Component<{
   isPaid: boolean;
   onExitAnimationPromise: (promise: Promise<any>) => void;
 }> = (props) => {
-  const {PopupPremium} = useHotReloadGuard();
+  const {showPremiumPopup, i18n, toastNew, hideToast, Row, usePremium} = useHotReloadGuard();
 
-  const isPremium = useIsPremium();
+  const isPremium = usePremium();
 
 
-  const handlePremiumOptionClick = (callback: () => void) => () => {
-    if(isPremium()) return callback();
+  const handlePremiumOptionClick = (event: MouseEvent) => {
+    if(isPremium()) return;
 
+    event.preventDefault();
     toastNew({
       langPackKey: 'PrivacySettings.Messages.PremiumError',
       langPackArguments: [
         anchorCallback(() => {
           hideToast();
-          PopupPremium.show({
+          showPremiumPopup({
             feature: 'message_privacy'
           });
         })
       ]
     });
+  };
+
+  const OptionRow = (optionProps: {
+    checked: boolean,
+    langKey: LangPackKey,
+    onSelect: () => void,
+    premium?: boolean,
+    value: MessagesPrivacyOption
+  }) => {
+    const locked = () => !!optionProps.premium && !isPremium();
+    const handleClick = (event: MouseEvent) => {
+      if(locked()) {
+        handlePremiumOptionClick(event);
+      }
+    };
+
+    return (
+      <Row clickable={handleClick}>
+        <Row.RadioField>
+          <RadioFieldTsx
+            class={locked() ? 'hide' : undefined}
+            checked={optionProps.checked}
+            name="privacy-messages"
+            value={String(optionProps.value)}
+            onChange={(checked) => checked && optionProps.onSelect()}
+          />
+        </Row.RadioField>
+        <Show when={locked()}>
+          <Row.Icon icon="premium_lock_filled" />
+        </Show>
+        <Row.Title>{i18n(optionProps.langKey)}</Row.Title>
+      </Row>
+    );
   };
 
   const caption = (
@@ -60,7 +88,7 @@ const OptionsSection: Component<{
     >
       {
         !props.isPaid ?
-          i18n('Privacy.MessagesInfo', [anchorCallback(() => void PopupPremium.show())]) :
+          i18n('Privacy.MessagesInfo', [anchorCallback(() => void showPremiumPopup())]) :
           i18n('PaidMessages.ChargeForMessagesDescription')
       }
     </Transition>
@@ -71,43 +99,34 @@ const OptionsSection: Component<{
       name="PrivacyMessagesTitle"
       caption={caption as any}
     >
-      <RowTsx
-        checkboxField={
-          <StaticRadio
-            floating
-            checked={props.store.option === MessagesPrivacyOption.Everybody}
-          />
-        }
-        clickable={() => {
+      <OptionRow
+        checked={props.store.option === MessagesPrivacyOption.Everybody}
+        langKey="PrivacySettingsController.Everbody"
+        onSelect={() => {
           props.setStore('option', MessagesPrivacyOption.Everybody);
         }}
-        title={i18n('PrivacySettingsController.Everbody')}
+        value={MessagesPrivacyOption.Everybody}
       />
-      <RowTsx
-        checkboxField={
-          isPremium() && <StaticRadio
-            floating
-            checked={props.store.option === MessagesPrivacyOption.ContactsAndPremium}
-          />
-        }
-        icon={!isPremium() ? 'premium_lock' : undefined}
-        clickable={handlePremiumOptionClick(() => {
+      <OptionRow
+        checked={props.store.option === MessagesPrivacyOption.ContactsAndPremium}
+        langKey="Privacy.ContactsAndPremium"
+        onSelect={() => {
           props.setStore('option', MessagesPrivacyOption.ContactsAndPremium);
-        })}
-        title={i18n('Privacy.ContactsAndPremium')}
+        }}
+        premium
+        value={MessagesPrivacyOption.ContactsAndPremium}
       />
-      <RowTsx
-        checkboxField={
-          isPremium() && <StaticRadio floating checked={props.isPaid} />
-        }
-        icon={!isPremium() ? 'premium_lock' : undefined}
-        clickable={handlePremiumOptionClick(() => {
+      <OptionRow
+        checked={props.isPaid}
+        langKey="PaidMessages.ChargeForMessages"
+        onSelect={() => {
           props.setStore(prev => ({
             option: MessagesPrivacyOption.Paid,
             stars: prev.stars || DEFAULT_STARS_AMOUNT
           }));
-        })}
-        title={i18n('PaidMessages.ChargeForMessages')}
+        }}
+        premium
+        value={MessagesPrivacyOption.Paid}
       />
     </Section>
   );

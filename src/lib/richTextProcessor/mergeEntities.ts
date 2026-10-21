@@ -1,12 +1,6 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MessageEntity} from '../../layer';
-import findConflictingEntity from './findConflictingEntity';
-import sortEntities from './sortEntities';
+import {MessageEntity} from '@layer';
+import findConflictingEntity from '@lib/richTextProcessor/findConflictingEntity';
+import sortEntities from '@lib/richTextProcessor/sortEntities';
 
 export default function mergeEntities(currentEntities: MessageEntity[], newEntities: MessageEntity[]) {
   currentEntities = currentEntities.slice();

@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import indexOfAndSplice from './array/indexOfAndSplice';
-import makeError from './makeError';
+import indexOfAndSplice from '@helpers/array/indexOfAndSplice';
+import makeError from '@helpers/makeError';
 
 export type Middleware = {
   (): boolean;

@@ -1,18 +1,19 @@
-import type {Reaction} from '../../../../layer';
-import type {HistoryStorage, RequestHistoryOptions, SearchStorageFilterKey} from '../../appMessagesManager';
-import getSearchType from './getSearchType';
+import type {Reaction} from '@layer';
+import type {HistoryStorage, RequestHistoryOptions, SearchStorageFilterKey} from '@appManagers/appMessagesManager';
+import getSearchType from '@appManagers/utils/messages/getSearchType';
 
 export default function getHistoryStorageKey(options: RequestHistoryOptions & {type: HistoryStorage['type']}) {
-  const {type, peerId, threadId} = options;
+  const {type, peerId, threadId, monoforumThreadId} = options;
   const filter = getSearchStorageFilterKey(options);
-  return [type, peerId, filter, threadId].filter(Boolean).join('_') as HistoryStorage['key'];
+  return [type, peerId, filter, threadId, monoforumThreadId].filter(Boolean).join('_') as HistoryStorage['key'];
 }
 
 export function getSearchStorageFilterKey({
   inputFilter,
   savedReaction,
   query,
-  hashtagType
+  hashtagType,
+  communityId
 }: Parameters<typeof getHistoryStorageKey>[0]): SearchStorageFilterKey {
   let reactionsPart: string;
   if(savedReaction) {
@@ -24,7 +25,8 @@ export function getSearchStorageFilterKey({
   }
 
   const filter: SearchStorageFilterKey = inputFilter?._;
-  return [filter, hashtagType !== 'this' && hashtagType, query, reactionsPart].filter(Boolean).join('_');
+  const communityPart = communityId ? `community-${communityId}` : undefined;
+  return [filter, hashtagType !== 'this' && hashtagType, query, reactionsPart, communityPart].filter(Boolean).join('_');
 }
 
 export function getHistoryStorageType(options: RequestHistoryOptions): HistoryStorage['type'] {

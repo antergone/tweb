@@ -1,12 +1,11 @@
 import {Component, Show} from 'solid-js';
 
-import {useLockScreenHotReloadGuard} from '../../lib/solidjs/hotReloadGuard';
-import {ScreenSize} from '../../helpers/mediaSizes';
+import {useLockScreenHotReloadGuard} from '@lib/solidjs/hotReloadGuard';
+import {ScreenSize, useMediaSizes} from '@helpers/mediaSizes';
 
-import ChatBackgroundGradientRenderer from '../chat/gradientRenderer';
+import ChatBackgroundGradientRenderer from '@components/chat/gradientRenderer';
 
-import useScreenSize from '../../hooks/useScreenSize';
-import {ChatBackground} from '../chat/bubbles/chatBackground';
+import {ChatBackground} from '@components/chat/bubbles/chatBackground';
 
 
 const Background: Component<{
@@ -14,10 +13,10 @@ const Background: Component<{
 }> = (props) => {
   const {themeController, rootScope} = useLockScreenHotReloadGuard();
 
-  const screenSize = useScreenSize();
+  const mediaSizes = useMediaSizes();
 
   return (
-    <Show when={screenSize() !== ScreenSize.mobile}>
+    <Show when={mediaSizes.activeScreen !== ScreenSize.mobile}>
       <ChatBackground
         themeController={themeController}
         managers={rootScope.managers}

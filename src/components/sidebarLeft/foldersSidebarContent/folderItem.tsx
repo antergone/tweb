@@ -1,27 +1,31 @@
 import {createComputed, createEffect, createMemo, createSignal, Show} from 'solid-js';
-import createMiddleware from '../../../helpers/solid/createMiddleware';
-import {CustomEmojiRendererElement} from '../../../lib/customEmoji/renderer';
-import {useHotReloadGuard} from '../../../lib/solidjs/hotReloadGuard';
-import Badge from '../../badge';
-import {IconTsx} from '../../iconTsx';
-import ripple from '../../ripple';
-import wrapFolderTitle from '../../wrappers/folderTitle';
-import FolderAnimatedIcon from './folderAnimatedIcon';
-import {FolderItemPayload} from './types';
-ripple; // keep
+import buttonKeyDown from '@helpers/solid/buttonKeyDown';
+import Modes from '@config/modes';
+import {keepMe} from '@helpers/keepMe';
+import createMiddleware from '@helpers/solid/createMiddleware';
+import {CustomEmojiRendererElement} from '@lib/customEmoji/renderer';
+import {useHotReloadGuard} from '@lib/solidjs/hotReloadGuard';
+import Badge from '@components/badge';
+import {IconTsx} from '@components/iconTsx';
+import ripple from '@components/ripple';
+import FolderAnimatedIcon from '@components/sidebarLeft/foldersSidebarContent/folderAnimatedIcon';
+import {FolderItemPayload} from '@components/sidebarLeft/foldersSidebarContent/types';
+
+keepMe(ripple);
 
 
 type FolderItemProps = FolderItemPayload & {
   ref?: (el: HTMLDivElement | null) => void,
   class?: string,
   selected?: boolean,
-  onClick?: () => void
+  onClick?: () => void,
+  'aria-label'?: string
 };
 
 const ICON_SIZE = 30;
 
 export default function FolderItem(props: FolderItemProps) {
-  const {rootScope} = useHotReloadGuard();
+  const {rootScope, wrapFolderTitle} = useHotReloadGuard();
 
   const [failedToFetchIconDoc, setFailedToFetchIconDoc] = createSignal(false);
 
@@ -64,11 +68,16 @@ export default function FolderItem(props: FolderItemProps) {
         [props.class]: !!props.class,
         'folders-sidebar__folder-item--selected': props.selected
       }}
+      role="button"
+      tabindex={Modes.a11y ? 0 : undefined}
+      aria-label={props['aria-label']}
+      aria-pressed={props.selected ? 'true' : undefined}
       {...(props.id !== undefined ?
         {'data-filter-id': props.id} :
         {}
       )}
       onClick={props.onClick}
+      onKeyDown={buttonKeyDown}
     >
       <Show
         when={showCustomIcon()}
@@ -86,17 +95,16 @@ export default function FolderItem(props: FolderItemProps) {
         />
       </Show>
       <Show when={title()}>
-        <div class="folders-sidebar__folder-item-name">{title()}</div>
+        <div class="folders-sidebar__folder-item-name" dir="auto">{title()}</div>
       </Show>
       <Show when={hasNotifications()}>
         <Badge
           class="folders-sidebar__folder-item-badge"
           tag="div"
-          color={props.notifications.muted && !props.selected ? 'gray' : 'primary'}
+          color={props.notifications.muted/*  && !props.selected */ ? 'gray' : 'primary'}
           size={18}
-        >
-          {'' + props.notifications.count}
-        </Badge>
+          count={props.notifications.count}
+        />
       </Show>
     </div>
   );

@@ -1,13 +1,14 @@
-import SwipeHandler from '../components/swipeHandler';
-import IS_TOUCH_SUPPORTED from '../environment/touchSupport';
-import {animateSingle, cancelAnimationByKey} from '../helpers/animation';
-import {CancellablePromise} from '../helpers/cancellablePromise';
-import cancelEvent from '../helpers/dom/cancelEvent';
-import findUpClassName from '../helpers/dom/findUpClassName';
-import liteMode from '../helpers/liteMode';
-import clamp from '../helpers/number/clamp';
-import debounce from '../helpers/schedulers/debounce';
-import {subscribeOn} from '../helpers/solid/subscribeOn';
+import SwipeHandler from '@components/swipeHandler';
+import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
+import {animateSingle, cancelAnimationByKey} from '@helpers/animation';
+import {CancellablePromise} from '@helpers/cancellablePromise';
+import cancelEvent from '@helpers/dom/cancelEvent';
+import findUpClassName from '@helpers/dom/findUpClassName';
+import WheelClassifier from '@helpers/dom/wheelClassifier';
+import liteMode from '@helpers/liteMode';
+import clamp from '@helpers/number/clamp';
+import debounce from '@helpers/schedulers/debounce';
+import {subscribeOn} from '@helpers/solid/subscribeOn';
 import {createSignal, createMemo, onCleanup, createEffect} from 'solid-js';
 
 const STATE_FOLDED = 1;
@@ -26,14 +27,15 @@ export function useCollapsable(props: {
   const folded = createMemo(() => progress() === STATE_FOLDED);
 
   const setProgress = (progress: number, skipAnimation?: boolean) => {
-    if(liteMode.isAvailable('animations') && !skipAnimation) setIsTransition(true);
+    if(liteMode.isAvailable('motion') && !skipAnimation) setIsTransition(true);
     _setProgress(progress);
   };
 
   const scrollTo = (wasProgress: number, open?: boolean) => {
     const startTime = Date.now();
+    const duration = liteMode.isAvailable('motion') ? 125 : 0;
     const _animation = animation = animateSingle(() => {
-      const value = clamp((Date.now() - startTime) / 125, 0, 1);
+      const value = duration ? clamp((Date.now() - startTime) / duration, 0, 1) : 1;
 
       let progress = wasProgress;
       if((wasProgress > 0.5 || open === false) && open !== true) {
@@ -70,11 +72,25 @@ export function useCollapsable(props: {
   };
 
   const debounced = debounce(onScrolled, 75, false, true);
+  const classifier = new WheelClassifier();
 
   const onMove = (delta: number, e?: WheelEvent | TouchEvent) => {
     const scrollTop = props.scrollable().scrollTop;
-    const isWheel = e instanceof WheelEvent;
+    const isWheel = !!e && 'deltaY' in e; // cross-realm-safe `instanceof WheelEvent` (Document PiP window)
     if(isWheel || true) {
+      if(scrollTop && progress() !== STATE_FOLDED) {
+        setProgress(STATE_FOLDED);
+        debounced.clearTimeout();
+        return;
+      }
+
+      if(isWheel) {
+        const type = classifier.push(e as WheelEvent);
+        if(type === 'inertia') {
+          return;
+        }
+      }
+
       const newState = delta < 0 ? STATE_UNFOLDED : STATE_FOLDED;
       if((scrollTop && progress() !== STATE_UNFOLDED) || debounced.isDebounced()) {
         debounced();
@@ -131,9 +147,12 @@ export function useCollapsable(props: {
       return;
     }
 
-    const wheelDeltaY = (e as any).wheelDeltaY as number;
-    const delta: number = -wheelDeltaY;
-    onMove(delta, e);
+    // * `wheelDeltaY` is a non-standard WebKit/Blink property that Firefox has never had, so
+    // * `-wheelDeltaY` came back NaN there and `NaN < 0` made every wheel resolve to
+    // * STATE_FOLDED — the collapsible could never be unfolded, and a folded stories list is
+    // * `pointer-events: none`, so clicking a story did nothing. `deltaY` is the standard
+    // * equivalent and carries the same sign, which is all `onMove` reads off it.
+    onMove(e.deltaY, e);
   };
   subscribeOn(props.listenWheelOn)('wheel', onWheel, {passive: false});
 

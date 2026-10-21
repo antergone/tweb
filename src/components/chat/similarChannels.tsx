@@ -1,33 +1,28 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
 import {createEffect, createSignal, JSX, For, untrack, Accessor, onCleanup, Ref, createMemo} from 'solid-js';
-import {i18n} from '../../lib/langPack';
-import rootScope from '../../lib/rootScope';
-import {AvatarNew} from '../avatarNew';
-import PeerTitle from '../peerTitle';
-import {ScrollableXTsx} from '../stories/list';
-import formatNumber from '../../helpers/number/formatNumber';
-import {Chat, MessagesChats, User} from '../../layer';
-import computeLockColor from '../../helpers/computeLockColor';
-import classNames from '../../helpers/string/classNames';
-import cancelEvent from '../../helpers/dom/cancelEvent';
-import {attachClickEvent} from '../../helpers/dom/clickEvent';
-import findUpClassName from '../../helpers/dom/findUpClassName';
-import PopupPremium from '../popups/premium';
-import appImManager from '../../lib/appManagers/appImManager';
-import anchorCallback from '../../helpers/dom/anchorCallback';
-import PopupElement from '../popups';
-import PopupPickUser from '../popups/pickUser';
-import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
-import {ButtonIconTsx} from '../buttonIconTsx';
-import {IconTsx} from '../iconTsx';
-import createMiddleware from '../../helpers/solid/createMiddleware';
-import showTooltip from '../tooltip';
-import {usePeer} from '../../stores/peers';
+import I18n, {i18n} from '@lib/langPack';
+import rootScope from '@lib/rootScope';
+import {AvatarNew} from '@components/avatarNew';
+import PeerTitle from '@components/peerTitle';
+import Scrollable from '@components/scrollable2';
+import formatNumber from '@helpers/number/formatNumber';
+import {Chat, MessagesChats, User} from '@layer';
+import computeLockColor from '@helpers/computeLockColor';
+import classNames from '@helpers/string/classNames';
+import cancelEvent from '@helpers/dom/cancelEvent';
+import {attachClickEvent} from '@helpers/dom/clickEvent';
+import findUpClassName from '@helpers/dom/findUpClassName';
+import showPremiumPopup from '@components/popups/premium';
+import appImManager from '@lib/appImManager';
+import anchorCallback from '@helpers/dom/anchorCallback';
+import showPickUserPopup from '@components/popups/pickUser';
+import apiManagerProxy from '@lib/apiManagerProxy';
+import {ButtonIconTsx} from '@components/buttonIconTsx';
+import {IconTsx} from '@components/iconTsx';
+import createMiddleware from '@helpers/solid/createMiddleware';
+import showTooltip from '@components/tooltip';
+import {usePeer} from '@stores/peers';
+import buttonKeyDown from '@helpers/solid/buttonKeyDown';
+import Modes from '@config/modes';
 
 let canvas: HTMLCanvasElement, context: CanvasRenderingContext2D;
 export function SimilarPeer(props: {
@@ -125,6 +120,9 @@ export function SimilarPeer(props: {
   return (
     <div
       class={classNames('similar-channels-channel', props.isLast && 'is-last', !displayBadge() && 'no-badge')}
+      role="button"
+      tabindex={Modes.a11y ? 0 : undefined}
+      onKeyDown={buttonKeyDown}
       ref={props.ref}
     >
       {props.isLast ? (
@@ -209,89 +207,11 @@ export default function SimilarChannels(props: {
     const hasMore = count > defaultLimit && !isPremiumFeaturesHidden;
     const rendered: Map<HTMLElement, Chat.channel> = new Map();
 
-    const Item = (chat: Chat.channel, idx: Accessor<number>) => {
-      const [badgeBackgroundUrl, setBadgeBackgroundUrl] = createSignal<string>();
-      const onImageLoad = (image: HTMLImageElement) => {
-        if(image.naturalWidth < 100) {
-          return;
-        }
-
-        // const perf = performance.now();
-        context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        setBadgeBackgroundUrl(computeLockColor(canvas));
-        // console.log('lock color', performance.now() - perf);
-      };
-      const peerId = chat.id.toPeerId(true);
-      const isLast = hasMore && idx() === defaultLimit - 1;
-
-      const avatar = untrack(() => {
-        return AvatarNew({
-          peerId: peerId,
-          size: 60,
-          processImageOnLoad: onImageLoad
-        });
-      });
-      avatar.node.classList.add('similar-channels-channel-avatar');
-      promises.push(avatar.readyThumbPromise);
-      if(isLast) {
-        avatar.node.classList.add('similar-channels-channel-avatar-stack-first');
-      }
-
-      let nameElement: HTMLElement;
-      if(!isLast) {
-        const peerTitle = new PeerTitle();
-        promises.push(peerTitle.update({peerId}));
-        nameElement = peerTitle.element;
-      } else {
-        nameElement = i18n('MoreSimilar');
-      }
-      nameElement.classList.add('similar-channels-channel-name');
-
-      const icon = (
-        <IconTsx
-          icon={isLast ? 'premium_lock' : 'newprivate_filled'}
-          class="similar-channels-channel-badge-icon"
-        />
-      );
-
-      return (
-        <div
-          class={classNames('similar-channels-channel', isLast && 'is-last')}
-          ref={(el) => rendered.set(el, isLast ? undefined : chat)}
-        >
-          {isLast ? (
-            <div class="similar-channels-channel-avatar-stack">
-              {avatar.element}
-              <div class="similar-channels-channel-avatar-stack-middle" />
-              <div class="similar-channels-channel-avatar-stack-last" />
-            </div>
-          ) : avatar.element}
-          <span
-            class="similar-channels-channel-badge"
-            style={badgeBackgroundUrl() && {'background-image': `url(${badgeBackgroundUrl()})`}}
-          >
-            {isLast ? (
-              <>
-                {`+${count - defaultLimit}`}
-                {!untrack(premium) && icon}
-              </>
-            ) : (
-              <>
-                {icon}
-                {formatNumber(chat.participants_count || 1, 1)}
-              </>
-            )}
-          </span>
-          {nameElement}
-        </div>
-      );
-    };
-
     const middleware = createMiddleware().get();
     const promises: Promise<any>[] = [];
     let ref: HTMLDivElement;
     const list = (
-      <div ref={ref} class="similar-channels-list">
+      <div ref={ref} class="similar-channels-list" role="group" aria-label={I18n.format('SimilarChannels', true)}>
         <For each={(messagesChats.chats as Chat.channel[]).slice(0, defaultLimit)}>
           {(chat, idx) => {
             const isLast = hasMore && idx() === defaultLimit - 1;
@@ -326,9 +246,9 @@ export default function SimilarChannels(props: {
       }
 
       if(premium()) {
-        PopupElement.createPopup(PopupPickUser, {
-          onSelect: (peerId) => {
-            appImManager.setInnerPeer({peerId});
+        showPickUserPopup({
+          onSelect: ([first]) => {
+            appImManager.setInnerPeer(first);
           },
           peerType: ['custom'],
           getMoreCustom: async() => {
@@ -337,14 +257,15 @@ export default function SimilarChannels(props: {
               isEnd: true
             };
           },
-          headerLangPackKey: 'SimilarChannels'
+          titleLangKey: 'SimilarChannels',
+          noSearch: true
         });
         return;
       }
 
       const anchor = anchorCallback(() => {
         close();
-        PopupPremium.show();
+        showPremiumPopup();
       });
       anchor.classList.add('primary');
 
@@ -355,8 +276,8 @@ export default function SimilarChannels(props: {
         textElement: i18n(
           'SimilarChannels.Unlock',
           [
-            anchor,
-            premiumLimit
+            premiumLimit,
+            anchor
           ]
         ),
         icon: 'star'
@@ -381,13 +302,13 @@ export default function SimilarChannels(props: {
       </svg>
       <div class="similar-channels-header">
         {i18n('SimilarChannels')}
-        <ButtonIconTsx icon="close" onClick={props.onClose} />
+        <ButtonIconTsx icon="close" aria-label={I18n.format('Close', true)} onClick={props.onClose} />
       </div>
-      <ScrollableXTsx>
+      <Scrollable axis="x">
         <div class="similar-channels-list-margin"></div>
         {list()}
         <div class="similar-channels-list-margin"></div>
-      </ScrollableXTsx>
+      </Scrollable>
     </div>
   );
 }

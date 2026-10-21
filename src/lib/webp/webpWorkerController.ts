@@ -1,12 +1,6 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MOUNT_CLASS_TO} from '../../config/debug';
-import deferredPromise, {CancellablePromise} from '../../helpers/cancellablePromise';
-import {WorkerTaskVoidTemplate} from '../../types';
+import {MOUNT_CLASS_TO} from '@config/debug';
+import deferredPromise, {CancellablePromise} from '@helpers/cancellablePromise';
+import {WorkerTaskVoidTemplate} from '@types';
 
 export interface ConvertWebPTask extends WorkerTaskVoidTemplate {
   type: 'convertWebp',

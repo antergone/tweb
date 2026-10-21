@@ -1,12 +1,8 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MOUNT_CLASS_TO} from '../config/debug';
-import EventListenerBase from './eventListenerBase';
-import {makeMediaSize, MediaSize} from './mediaSize';
+import {MOUNT_CLASS_TO} from '@config/debug';
+import EventListenerBase from '@helpers/eventListenerBase';
+import {makeMediaSize, MediaSize} from '@helpers/mediaSize';
+import {createStore} from 'solid-js/store';
+import {getAppWindow, onAppWindowChange} from '@helpers/appWindow';
 
 type MediaTypeSizes = {
   regular: MediaSize,
@@ -36,13 +32,24 @@ export enum ScreenSize {
 }
 
 const MOBILE_SIZE = 600;
+// The medium↔large boundary IS the floating↔docked line: at/below this width the
+// left sidebar floats as a drawer (ScreenSize.medium); above it it docks
+// side-by-side and the chat sits beside it (ScreenSize.large), clamped to the
+// leftover width (updateColumnWidths.ts). No separate narrow-docked tier.
 const FLOATING_LEFT_SIDEBAR_SIZE = 925;
-const MEDIUM_SIZE = 1275;
 const LARGE_SIZE = 1680;
 
 const CUSTOM_EMOJI_SIZE = makeMediaSize(20, 20);
 const ESG_CUSTOM_EMOJI_SIZE = makeMediaSize(36, 36);
 const EMOJI_STATUS_SIZE = makeMediaSize(18, 18);
+
+const [store, setStore] = createStore({
+  isMobile: false,
+  isFloatingLeftSidebar: false,
+  isLessThanFloatingLeftSidebar: false,
+  active: undefined as MediaTypeSizes,
+  activeScreen: undefined as ScreenSize
+});
 
 class MediaSizes extends EventListenerBase<{
   changeScreen: (from: ScreenSize, to: ScreenSize) => void,
@@ -50,7 +57,7 @@ class MediaSizes extends EventListenerBase<{
 }> {
   private screenSizes: {key: ScreenSize, value: number}[] = [
     {key: ScreenSize.mobile, value: MOBILE_SIZE},
-    {key: ScreenSize.medium, value: MEDIUM_SIZE},
+    {key: ScreenSize.medium, value: FLOATING_LEFT_SIDEBAR_SIZE},
     {key: ScreenSize.large, value: LARGE_SIZE}
   ];
 
@@ -99,22 +106,35 @@ class MediaSizes extends EventListenerBase<{
   public active: MediaTypeSizes;
   public activeScreen: ScreenSize;
   private rAF: number;
+  private win: Window;
+  private onWinResize: () => void;
 
   constructor() {
     super();
 
-    window.addEventListener('resize', () => {
-      if(this.rAF) window.cancelAnimationFrame(this.rAF);
-      this.rAF = window.requestAnimationFrame(() => {
+    this.onWinResize = () => {
+      if(this.rAF) this.win.cancelAnimationFrame(this.rAF);
+      this.rAF = this.win.requestAnimationFrame(() => {
         this.handleResize();
         this.rAF = 0;
       });
-    });
+    };
+
+    // Track the active app window (the tab, or the Document PiP window while popped out) so the
+    // breakpoint math reads whichever viewport the app is actually rendered in.
+    this.bindWindow(getAppWindow());
+    onAppWindowChange((win) => this.bindWindow(win));
+  }
+
+  private bindWindow(win: Window) {
+    this.win?.removeEventListener('resize', this.onWinResize);
+    this.win = win;
+    this.win.addEventListener('resize', this.onWinResize);
     this.handleResize();
   }
 
   private handleResize = () => {
-    const innerWidth = window.innerWidth;
+    const innerWidth = this.win.innerWidth;
     // this.isMobile = innerWidth <= 720;
 
     let activeScreen = this.screenSizes[0].key;
@@ -126,11 +146,21 @@ class MediaSizes extends EventListenerBase<{
     }
 
     const wasScreen = this.activeScreen;
+    const isMobile = activeScreen === ScreenSize.mobile;
+    const isLessThanFloatingLeftSidebar = innerWidth <= FLOATING_LEFT_SIDEBAR_SIZE;
     this.activeScreen = activeScreen;
-    this.isMobile = this.activeScreen === ScreenSize.mobile;
-    this.isLessThanFloatingLeftSidebar = innerWidth <= FLOATING_LEFT_SIDEBAR_SIZE;
-    this.isFloatingLeftSidebar = this.activeScreen === ScreenSize.medium && this.isLessThanFloatingLeftSidebar;
-    this.active = this.isMobile ? this.sizes.handhelds : this.sizes.desktop;
+    this.isMobile = isMobile;
+    this.isLessThanFloatingLeftSidebar = isLessThanFloatingLeftSidebar;
+    this.isFloatingLeftSidebar = activeScreen === ScreenSize.medium && isLessThanFloatingLeftSidebar;
+    this.active = isMobile ? this.sizes.handhelds : this.sizes.desktop;
+
+    setStore({
+      isMobile: this.isMobile,
+      isFloatingLeftSidebar: this.isFloatingLeftSidebar,
+      isLessThanFloatingLeftSidebar: this.isLessThanFloatingLeftSidebar,
+      active: this.active,
+      activeScreen: this.activeScreen
+    });
 
     // console.time('esg');
     // const computedStyle = window.getComputedStyle(document.documentElement);
@@ -162,3 +192,7 @@ class MediaSizes extends EventListenerBase<{
 const mediaSizes = new MediaSizes();
 MOUNT_CLASS_TO.mediaSizes = mediaSizes;
 export default mediaSizes;
+
+export function useMediaSizes() {
+  return store;
+}

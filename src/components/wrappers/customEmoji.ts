@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MessageEntity} from '../../layer';
-import wrapRichText from '../../lib/richTextProcessor/wrapRichText';
+import {MessageEntity} from '@layer';
+import wrapRichText from '@lib/richTextProcessor/wrapRichText';
 
 export default function wrapCustomEmoji({
   docIds,

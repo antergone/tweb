@@ -1,17 +1,12 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import type EventListenerBase from '../../../helpers/eventListenerBase';
-import type MTPNetworker from '../networker';
+import type EventListenerBase from '@helpers/eventListenerBase';
+import type MTPNetworker from '@lib/mtproto/networker';
 
 export default interface MTTransport {
-  networker: MTPNetworker;
+  networker?: MTPNetworker;
   send: (data: Uint8Array) => void;
   connected: boolean;
   destroy: () => void;
+  noScheduler?: boolean;
 }
 
 export interface MTConnection extends EventListenerBase<{

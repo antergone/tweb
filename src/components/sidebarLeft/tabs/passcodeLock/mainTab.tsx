@@ -1,30 +1,26 @@
 import {Component, createResource, createSignal, onCleanup, Show} from 'solid-js';
+import {IS_MOBILE} from '@environment/userAgent';
+import {keepMe} from '@helpers/keepMe';
+import ListenerSetter from '@helpers/listenerSetter';
+import {joinDeepPath} from '@helpers/object/setDeepProperty';
+import {i18n, LangPackKey} from '@lib/langPack';
+import {usePasscodeActions} from '@lib/passcode/actions';
+import {useHotReloadGuard} from '@lib/solidjs/hotReloadGuard';
+import SettingsTabLottieAnimation from '@components/settingsTabLottieAnimation';
+import ripple from '@components/ripple';
+import Section from '@components/section';
+import type SliderSuperTab from '@components/sliderTab';
+import type {AppPasscodeLockTab} from '@components/solidJsTabs';
+import {usePromiseCollector} from '@components/solidJsTabs/promiseCollector';
+import {useSuperTab} from '@components/solidJsTabs/superTabProvider';
+import Space from '@components/space';
+import CheckboxFieldTsx from '@components/checkboxFieldTsx';
+import commonStyles from '@components/sidebarLeft/tabs/passcodeLock/common.module.scss';
+import InlineSelect from '@components/sidebarLeft/tabs/passcodeLock/inlineSelect';
+import styles from '@components/sidebarLeft/tabs/passcodeLock/mainTab.module.scss';
+import ShortcutBuilder, {ShortcutKey} from '@components/sidebarLeft/tabs/passcodeLock/shortcutBuilder';
 
-import {useHotReloadGuard} from '../../../../lib/solidjs/hotReloadGuard';
-import {joinDeepPath} from '../../../../helpers/object/setDeepProperty';
-import {usePasscodeActions} from '../../../../lib/passcode/actions';
-import ListenerSetter from '../../../../helpers/listenerSetter';
-import {IS_MOBILE} from '../../../../environment/userAgent';
-import {i18n, LangPackKey} from '../../../../lib/langPack';
-
-import confirmationPopup from '../../../confirmationPopup';
-import type SliderSuperTab from '../../../sliderTab';
-import ripple from '../../../ripple'; ripple; // keep
-import StaticSwitch from '../../../staticSwitch';
-import Section from '../../../section';
-import RowTsx from '../../../rowTsx';
-import Space from '../../../space';
-
-import {usePromiseCollector} from '../solidJsTabs/promiseCollector';
-import {useSuperTab} from '../solidJsTabs/superTabProvider';
-import type {AppPasscodeLockTab} from '../solidJsTabs';
-
-import ShortcutBuilder, {ShortcutKey} from './shortcutBuilder';
-import LottieAnimation from './lottieAnimation';
-import InlineSelect from './inlineSelect';
-
-import commonStyles from './common.module.scss';
-import styles from './mainTab.module.scss';
+keepMe(ripple);
 
 
 type AppPasscodeLockTabType = typeof AppPasscodeLockTab;
@@ -111,7 +107,7 @@ const NoPasscodeContent = () => {
 
   return (
     <Section caption="PasscodeLock.Notice">
-      <LottieAnimation name="UtyanPasscode" />
+      <SettingsTabLottieAnimation name="UtyanPasscode" />
 
       <div class={styles.MainDescription}>{i18n('PasscodeLock.Description')}</div>
 
@@ -138,7 +134,8 @@ const PasscodeSetContent: Component<{
 }> = (props) => {
   const [tab, {AppPasscodeEnterPasswordTab, AppPasscodeLockTab, AppPrivacyAndSecurityTab}] = useSuperTab<AppPasscodeLockTabType>();
   const {disablePasscode, changePasscode} = usePasscodeActions();
-  const {rootScope, setQuizHint} = useHotReloadGuard();
+  const {rootScope, setQuizHint, Row, useAppSettings, confirmationPopup} = useHotReloadGuard();
+  const [, setAppSettings] = useAppSettings();
 
   const options = [
     {value: 0, label: () => i18n('PasscodeLock.Disabled')},
@@ -182,17 +179,17 @@ const PasscodeSetContent: Component<{
 
   function setShortcutKeys(value: ShortcutKey[]) {
     mutateShortcutKeys(value);
-    rootScope.managers.appStateManager.setByKey(joinDeepPath('settings', 'passcode', 'lockShortcut'), value);
+    setAppSettings('passcode', 'lockShortcut', value);
   }
 
   function setShortcutEnabled(value: boolean) {
     mutateShortcutEnabled(value);
-    rootScope.managers.appStateManager.setByKey(joinDeepPath('settings', 'passcode', 'lockShortcutEnabled'), value);
+    setAppSettings('passcode', 'lockShortcutEnabled', value);
   }
 
   function setLockTimeout(value: number | null) {
     mutateLockTimeout(value);
-    rootScope.managers.appStateManager.setByKey(joinDeepPath('settings', 'passcode', 'autoLockTimeoutMins'), value);
+    setAppSettings('passcode', 'autoLockTimeoutMins', value);
   }
 
   onCleanup(() => {
@@ -262,29 +259,31 @@ const PasscodeSetContent: Component<{
   return (
     <>
       <Section class={styles.FirstSection} caption={caption as any}>
-        <LottieAnimation name="UtyanPasscode" />
+        <SettingsTabLottieAnimation name="UtyanPasscode" />
 
         <Space amount="1.125rem" />
 
-        <RowTsx
-          title={i18n('PasscodeLock.TurnOff.Title')}
-          icon="lockoff"
-          clickable={onDisable}
-        />
-        <RowTsx
-          title={i18n('PasscodeLock.ChangePasscode')}
-          icon="key"
-          clickable={onPasscodeChange}
-        />
+        <Row clickable={onDisable}>
+          <Row.Icon icon="lockoff" />
+          <Row.Title>{i18n('PasscodeLock.TurnOff.Title')}</Row.Title>
+        </Row>
+        <Row clickable={onPasscodeChange}>
+          <Row.Icon icon="key_filled" />
+          <Row.Title>{i18n('PasscodeLock.ChangePasscode')}</Row.Title>
+        </Row>
       </Section>
 
       <Section caption={canShowShortcut() ? 'PasscodeLock.LockShortcutDescription' : undefined}>
         <Show when={lockTimeout.state === 'ready'}>
-          <RowTsx
+          <Row
             ref={setAutoCloseRowEl}
-            classList={{[styles.Row]: true}}
-            title={i18n('PasscodeLock.AutoLock')}
-            rightContent={
+            class={styles.Row}
+            clickable={() => {
+              setIsOpen(true);
+            }}
+          >
+            <Row.Title>{i18n('PasscodeLock.AutoLock')}</Row.Title>
+            <Row.RightContent>
               <InlineSelect
                 value={lockTimeout()}
                 onClose={() => setIsOpen(false)}
@@ -293,23 +292,16 @@ const PasscodeSetContent: Component<{
                 isOpen={isOpen()}
                 parent={autoCloseRowEl()}
               />
-            }
-            clickable={() => {
-              setIsOpen(true);
-            }}
-          />
+            </Row.RightContent>
+          </Row>
         </Show>
         <Show when={canShowShortcut()}>
-          <RowTsx
-            title={i18n('PasscodeLock.EnableLockShortcut')}
-            classList={{[styles.Row]: true}}
-            rightContent={
-              <StaticSwitch checked={shortcutEnabled()} />
-            }
-            clickable={(e) => {
-              setShortcutEnabled(!shortcutEnabled());
-            }}
-          />
+          <Row>
+            <Row.CheckboxFieldToggle>
+              <CheckboxFieldTsx toggle checked={shortcutEnabled()} onChange={setShortcutEnabled} />
+            </Row.CheckboxFieldToggle>
+            <Row.Title>{i18n('PasscodeLock.EnableLockShortcut')}</Row.Title>
+          </Row>
           <div class={styles.ShortcutBuilderRow} classList={{[styles.collapsed]: !shortcutEnabled()}}>
             <ShortcutBuilder class={styles.ShortcutBuilderRowChild} value={shortcutKeys() || []} onChange={setShortcutKeys} key="L" />
           </div>

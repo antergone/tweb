@@ -1,11 +1,12 @@
 import {Component, createSignal, JSX} from 'solid-js';
 
-import Icons from '../../icons';
+import Icons from '@/icons';
 
-import Scrollable from '../scrollable2';
-import {IconTsx} from '../iconTsx';
+import Scrollable from '@components/scrollable2';
+import {IconTsx} from '@components/iconTsx';
+import Modes from '@config/modes';
 
-import styles from './iconLibrary.module.scss';
+import styles from '@components/iconLibrary/iconLibrary.module.scss';
 
 
 const icons = Object.keys(Icons) as Icon[];
@@ -51,10 +52,24 @@ const IconLibrary: Component<{}> = () => {
 
 const IconItem: Component<{
   icon: Icon;
-  onMouseEnter: JSX.EventHandlerUnion<HTMLSpanElement, MouseEvent>;
-  onClick: JSX.EventHandlerUnion<HTMLSpanElement, MouseEvent>;
+  onMouseEnter: JSX.EventHandlerUnion<HTMLElement, MouseEvent>;
+  onClick: JSX.EventHandlerUnion<HTMLElement, MouseEvent>;
 }> = (props) => {
-  return <IconTsx class={/* @once */ styles.Icon} icon={/* @once */ props.icon} onMouseEnter={/* @once */ props.onMouseEnter} onClick={/* @once */ props.onClick} />;
+  if(!Modes.a11y) {
+    return <IconTsx class={/* @once */ styles.Icon} icon={/* @once */ props.icon} onMouseEnter={/* @once */ props.onMouseEnter} onClick={/* @once */ props.onClick} />;
+  }
+
+  return (
+    <button
+      type="button"
+      class={/* @once */ styles.Icon}
+      aria-label={/* @once */ props.icon}
+      onMouseEnter={/* @once */ props.onMouseEnter}
+      onClick={/* @once */ props.onClick}
+    >
+      <IconTsx icon={/* @once */ props.icon} />
+    </button>
+  );
 };
 
 export default IconLibrary;

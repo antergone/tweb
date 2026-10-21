@@ -1,44 +1,38 @@
 /*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- *
  * Originally from:
  * https://github.com/zhukov/webogram
  * Copyright (C) 2014 Igor Zhukov <igor.beatle@gmail.com>
  * https://github.com/zhukov/webogram/blob/master/LICENSE
  */
 
-import transportController from './transports/controller';
-import {TLSerialization, TLDeserialization} from './tl_utils';
-import {TransportType} from './dcConfigurator';
-import rsaKeysManager from './rsaKeysManager';
-import CryptoWorker from '../crypto/cryptoMessagePort';
-import {logger, LogTypes} from '../logger';
-import DEBUG from '../../config/debug';
-import {Awaited, DcId} from '../../types';
-import addPadding from '../../helpers/bytes/addPadding';
-import bytesCmp from '../../helpers/bytes/bytesCmp';
-import bytesFromHex from '../../helpers/bytes/bytesFromHex';
-import bytesToHex from '../../helpers/bytes/bytesToHex';
-import bytesXor from '../../helpers/bytes/bytesXor';
-import {bigIntFromBytes} from '../../helpers/bigInt/bigIntConversion';
+import type MTTransport from '@lib/mtproto/transports/transport';
+import type {TimeManager} from '@lib/mtproto/timeManager';
+import type {DcConfigurator, TransportType} from '@lib/mtproto/dcConfigurator';
+import transportController from '@lib/mtproto/transports/controller';
+import {TLSerialization, TLDeserialization} from '@lib/mtproto/tl_utils';
+import rsaKeysManager from '@lib/mtproto/rsaKeysManager';
+import CryptoWorker from '@lib/crypto/cryptoMessagePort';
+import {logger} from '@lib/logger';
+import DEBUG from '@config/debug';
+import {DcId, Modify} from '@types';
+import addPadding from '@helpers/bytes/addPadding';
+import bytesCmp from '@helpers/bytes/bytesCmp';
+import bytesFromHex from '@helpers/bytes/bytesFromHex';
+import bytesToHex from '@helpers/bytes/bytesToHex';
+import bytesXor from '@helpers/bytes/bytesXor';
+import {bigIntFromBytes} from '@helpers/bigInt/bigIntConversion';
 import bigInt from 'big-integer';
-import randomize from '../../helpers/array/randomize';
-import {AppManager} from '../appManagers/manager';
-import Modes from '../../config/modes';
-
-/* let fNewNonce: any = bytesFromHex('8761970c24cb2329b5b2459752c502f3057cb7e8dbab200e526e8767fdc73b3c').reverse();
-let fNonce: any = bytesFromHex('b597720d11faa5914ef485c529cde414').reverse();
-let fResult: any = new Uint8Array(bytesFromHex('000000000000000001b473a0661b285e480000006324160514e4cd29c585f44e91a5fa110d7297b5c0c4134c84893db5715ecd56af5ed618082182053cc5de91cd00000015c4b51c02000000a5b7f709355fc30b216be86c022bb4c3'));
-
-fNewNonce = false;
-fNonce = false;
-fResult = false; */
+import Modes from '@config/modes';
+import {randomBytes} from '@helpers/random';
+import {MTAuthKey} from '@lib/mtproto/authKey';
+import safeAssign from '@helpers/object/safeAssign';
+import getTransportError from '@lib/mtproto/transports/getTransportError';
 
 type AuthOptions = {
   dcId: number,
-  nonce: Uint8Array,
+  nonce?: Uint8Array,
+  temp: boolean,
+  media: boolean,
 
   serverNonce?: Uint8Array,
   pq?: Uint8Array,
@@ -65,12 +59,15 @@ type AuthOptions = {
   tmpAesKey?: Uint8Array,
   tmpAesIv?: Uint8Array,
 
-  authKeyId?: Uint8Array,
-  authKey?: Uint8Array,
+  authKey?: MTAuthKey,
   serverSalt?: Uint8Array,
 
   localTime?: number,
   serverTime?: any,
+
+  transport?: MTTransport,
+  expiresIn?: number,
+  expiresAt?: number
 };
 
 type ResPQ = {
@@ -92,6 +89,11 @@ type P_Q_inner_data = {
   dc: number;
 };
 
+type P_Q_inner_data_temp_dc = Modify<P_Q_inner_data, {
+  _: 'p_q_inner_data_temp_dc',
+  expires_in: number
+}>;
+
 type req_DH_params = {
   nonce: Uint8Array;
   server_nonce: Uint8Array;
@@ -101,23 +103,29 @@ type req_DH_params = {
   encrypted_data: Uint8Array;
 };
 
-export class Authorizer extends AppManager {
+export class Authorizer {
   private cached: {
     [dcId: DcId]: Promise<AuthOptions>
   };
-
-  private log: ReturnType<typeof logger>;
 
   private transportType: TransportType;
 
   private getTransportTypePromise: Promise<void>;
 
-  protected after() {
+  private log: ReturnType<typeof logger>;
+  private timeManager: TimeManager;
+  private dcConfigurator: DcConfigurator;
+
+  constructor(options: {
+    timeManager: TimeManager,
+    dcConfigurator: DcConfigurator
+  }) {
+    safeAssign(this, options);
+    this.log = logger('AUTHORIZER');
     this.cached = {};
-    this.log = logger(`AUTHORIZER`, LogTypes.Error | LogTypes.Log);
   }
 
-  private sendPlainRequest(dcId: DcId, requestArray: Uint8Array) {
+  private sendPlainRequest(transport: MTTransport, requestArray: Uint8Array) {
     const requestLength = requestArray.byteLength;
 
     const header = new TLSerialization();
@@ -130,7 +138,6 @@ export class Authorizer extends AppManager {
     resultArray.set(headerArray);
     resultArray.set(requestArray, headerArray.length);
 
-    const transport = this.dcConfigurator.chooseServer(dcId, 'client', this.transportType);
     const baseError = {
       code: 406,
       type: 'NETWORK_BAD_RESPONSE'
@@ -151,16 +158,13 @@ export class Authorizer extends AppManager {
       }
 
       try {
-        /* result = fResult ? fResult : result;
-        fResult = new Uint8Array(0); */
-
-        const deserializer = new TLDeserialization<MTLong>(result, {mtproto: true});
-
-        if(result.length === 4) {
-          const errorCode = deserializer.fetchInt();
+        const errorCode = getTransportError(result);
+        if(errorCode !== undefined) {
           this.log.error('mtpSendPlainRequest: wrong response, error code:', errorCode);
           throw errorCode;
         }
+
+        const deserializer = new TLDeserialization<MTLong>(result, {mtproto: true});
 
         const auth_key_id = deserializer.fetchLong('auth_key_id');
         if(auth_key_id !== '0') this.log.error('auth_key_id !== 0', auth_key_id);
@@ -189,6 +193,7 @@ export class Authorizer extends AppManager {
   }
 
   private async sendReqPQ(auth: AuthOptions) {
+    auth.nonce = randomBytes(16);
     const request = new TLSerialization({mtproto: true});
 
     request.storeMethod('req_pq_multi', {nonce: auth.nonce});
@@ -199,7 +204,7 @@ export class Authorizer extends AppManager {
 
     let deserializer: Awaited<ReturnType<Authorizer['sendPlainRequest']>>;
     try {
-      const promise = this.sendPlainRequest(auth.dcId, request.getBytes(true));
+      const promise = this.sendPlainRequest(auth.transport, request.getBytes(true));
       rsaKeysManager.prepare();
       deserializer = await promise;
     } catch(error) {
@@ -221,6 +226,20 @@ export class Authorizer extends AppManager {
     auth.serverNonce = response.server_nonce; // need
     auth.pq = response.pq;
     auth.fingerprints = response.server_public_key_fingerprints;
+
+    // pq is an unauthenticated TL `bytes` field of the plaintext resPQ, and fetchBytes
+    // caps nothing. It goes straight into unbounded Brent-Pollard factorization, so an
+    // oversized or degenerate value wedges the crypto worker — which also carries all
+    // transport obfuscation — for the lifetime of the shared worker. tdlib's
+    // handle_res_pq applies the same 8-byte limit.
+    if(!auth.pq?.length || auth.pq.length > 8) {
+      throw new Error('[MT] resPQ pq has invalid length: ' + auth.pq?.length);
+    }
+
+    // 0 and 1 have no factorization and spin the rho loop forever
+    if(auth.pq.every((byte, i) => i === auth.pq.length - 1 ? byte <= 1 : byte === 0)) {
+      throw new Error('[MT] resPQ pq is degenerate');
+    }
 
     if(DEBUG) {
       this.log('Got ResPQ', bytesToHex(auth.serverNonce), bytesToHex(auth.pq), auth.fingerprints);
@@ -256,9 +275,9 @@ export class Authorizer extends AppManager {
   }
 
   private async sendReqDhParams(auth: AuthOptions): Promise<AuthOptions> {
-    auth.newNonce = randomize(new Uint8Array(32));
+    auth.newNonce = randomBytes(32);
 
-    const p_q_inner_data_dc: P_Q_inner_data = {
+    const p_q_inner_data_dc: P_Q_inner_data | P_Q_inner_data_temp_dc = {
       _: 'p_q_inner_data_dc',
       pq: auth.pq,
       p: auth.p,
@@ -266,14 +285,20 @@ export class Authorizer extends AppManager {
       nonce: auth.nonce,
       server_nonce: auth.serverNonce,
       new_nonce: auth.newNonce,
-      dc: 0
+      dc: (auth.dcId + (Modes.test ? 10000 : 0)) * (auth.media ? -1 : 1)
     };
+
+    const maxBytesLength = 144 + (auth.temp ? 4 : 0);
+    if(auth.temp) {
+      (p_q_inner_data_dc as any)._ = 'p_q_inner_data_temp_dc';
+      (p_q_inner_data_dc as any).expires_in = auth.expiresIn;
+    }
 
     const pQInnerDataSerialization = new TLSerialization({mtproto: true});
     pQInnerDataSerialization.storeObject(p_q_inner_data_dc, 'P_Q_inner_data', 'DECRYPTED_DATA');
 
     const data = pQInnerDataSerialization.getBytes(true);
-    if(data.length > 144) {
+    if(data.length > maxBytesLength) {
       throw 'DH_params: data is more than 144 bytes!';
     }
 
@@ -282,7 +307,7 @@ export class Authorizer extends AppManager {
 
     const getKeyAesEncrypted = async() => {
       for(;;) {
-        const tempKey = randomize(new Uint8Array(32));
+        const tempKey = randomBytes(32);
         const dataWithHash = dataPadReversed.concat(await CryptoWorker.invokeCrypto('sha256', tempKey.concat(dataWithPadding)));
         if(dataWithHash.length !== 224) {
           throw 'DH_params: dataWithHash !== 224 bytes!';
@@ -324,7 +349,7 @@ export class Authorizer extends AppManager {
 
     let deserializer: Awaited<ReturnType<Authorizer['sendPlainRequest']>>;
     try {
-      deserializer = await this.sendPlainRequest(auth.dcId, requestBytes);
+      deserializer = await this.sendPlainRequest(auth.transport, requestBytes);
     } catch(error) {
       this.log.error('Send req_DH_params FAIL!', error);
       throw error;
@@ -418,6 +443,11 @@ export class Authorizer extends AppManager {
     }
 
     this.timeManager.applyServerTime(auth.serverTime, auth.localTime);
+
+    if(auth.temp) {
+      // * the server counts the lifetime from its own clock
+      auth.expiresAt = auth.serverTime + auth.expiresIn;
+    }
   }
 
   private verifyDhParams(g: number, dhPrime: Uint8Array, gA: Uint8Array) {
@@ -469,8 +499,7 @@ export class Authorizer extends AppManager {
   private async sendSetClientDhParams(auth: AuthOptions): Promise<AuthOptions> {
     const gBytes = bytesFromHex(auth.g.toString(16));
 
-    auth.b = randomize(new Uint8Array(256));
-    // MTProto.secureRandom.nextBytes(auth.b);
+    auth.b = randomBytes(256);
 
     // let gB: Awaited<ReturnType<typeof CryptoWorker['modPow']>>;
     try {
@@ -504,7 +533,7 @@ export class Authorizer extends AppManager {
 
     let deserializer: Awaited<ReturnType<Authorizer['sendPlainRequest']>>;
     try {
-      deserializer = await this.sendPlainRequest(auth.dcId, request.getBytes(true));
+      deserializer = await this.sendPlainRequest(auth.transport, request.getBytes(true));
     } catch(err) {
       throw err;
     }
@@ -551,8 +580,7 @@ export class Authorizer extends AppManager {
           this.log('Auth successfull!', authKeyId, authKey, serverSalt);
         }
 
-        auth.authKeyId = authKeyId;
-        auth.authKey = authKey;
+        auth.authKey = new MTAuthKey(authKey, authKeyId, auth.expiresAt);
         auth.serverSalt = serverSalt;
 
         return auth;
@@ -590,35 +618,50 @@ export class Authorizer extends AppManager {
     });
   };
 
-  public auth(dcId: DcId) {
-    let promise = this.cached[dcId];
-    if(promise) {
-      return promise;
+  private async _auth(dcId: DcId) {
+    await this.getTransportType();
+
+    let error: ApiError;
+    let retries = 0;
+    while(++retries <= 3) {
+      try {
+        return await this.sendReqPQ({
+          dcId,
+          temp: false,
+          transport: this.dcConfigurator.chooseServer(dcId, 'client', this.transportType),
+          media: false
+        });
+      } catch(err) {
+        error = err as ApiError;
+      }
     }
 
-    promise = new Promise(async(resolve, reject) => {
-      await this.getTransportType();
+    throw error;
+  }
 
-      let error: ApiError;
-      let _try = 1;
-      while(_try++ <= 3) {
-        try {
-          const auth: AuthOptions = {
-            dcId,
-            nonce: randomize(new Uint8Array(16))
-          };
-
-          const promise = this.sendReqPQ(auth);
-          resolve(await promise);
-          return;
-        } catch(err) {
-          error = err as ApiError;
-        }
-      }
-
-      reject(error);
+  /**
+   * The permanent key of a DC, made once and kept.
+   */
+  public auth(dcId: DcId) {
+    return this.cached[dcId] ??= this._auth(dcId).catch((err) => {
+      delete this.cached[dcId];
+      throw err;
     });
+  }
 
-    return this.cached[dcId] = promise;
+  /**
+   * One attempt at a temporary key over `transport`. The caller owns the
+   * connection: binding the key goes over the same one.
+   *
+   * @param media for the media cluster of the DC, which has keys of its own
+   */
+  public authTemp(dcId: DcId, media: boolean, transport: MTTransport, expiresIn: number) {
+    return this.sendReqPQ({
+      dcId,
+      temp: true,
+      transport,
+      media,
+      expiresIn
+    });
   }
 }

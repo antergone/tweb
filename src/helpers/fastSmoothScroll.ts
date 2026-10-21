@@ -1,16 +1,11 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
 // * Jolly Cobra's fastSmoothScroll slightly patched
 
-import {dispatchHeavyAnimationEvent} from '../hooks/useHeavyAnimationCheck';
-import {fastRafPromise} from './schedulers';
-import {animateSingle, cancelAnimationByKey} from './animation';
-import isInDOM from './dom/isInDOM';
-import liteMode from './liteMode';
+import {dispatchHeavyAnimationEvent} from '@hooks/useHeavyAnimationCheck';
+import {fastRafPromise} from '@helpers/schedulers';
+import {animateSingle, cancelAnimationByKey} from '@helpers/animation';
+import isInDOM from '@helpers/dom/isInDOM';
+import liteMode from '@helpers/liteMode';
+import {isElementRTL} from '@helpers/dom/isDocumentRTL';
 
 const MIN_JS_DURATION = 250;
 const MAX_JS_DURATION = 600;
@@ -20,11 +15,12 @@ const SHORT_TRANSITION_MAX_DISTANCE = 500;
 export enum FocusDirection {
   Up,
   Down,
-  Static,
+  Static
 };
 
 export type ScrollGetNormalSizeCallback = (options: {rect: DOMRect}) => number;
 export type ScrollGetElementPositionCallback = (options: {elementRect: DOMRect, containerRect: DOMRect, elementPosition: number}) => number;
+export type ScrollGetElementSizeCallback = (options: {elementRect: DOMRect}) => number;
 export type ScrollStartCallbackDimensions = {
   scrollSize: number,
   scrollPosition: number,
@@ -47,18 +43,29 @@ export type ScrollOptions = {
   axis?: 'x' | 'y',
   getNormalSize?: ScrollGetNormalSizeCallback,
   getElementPosition?: ScrollGetElementPositionCallback,
+  /**
+   * Centering only: the size of the part of the element that has to end up in the middle,
+   * when it is not the whole element (a quote inside a bubble taller than the screen).
+   */
+  getElementSize?: ScrollGetElementSizeCallback,
   fallbackToElementStartWhenCentering?: HTMLElement,
   startCallback?: (dimensions: ScrollStartCallbackDimensions) => void,
   transitionFunction?: (value: number) => number
 };
 
-export function fastSmoothScrollToStart(container: HTMLElement, axis: 'x') {
+export function fastSmoothScrollToStart(
+  container: HTMLElement,
+  axis: 'x' | 'y',
+  forceDuration?: number
+) {
   return fastSmoothScroll({
     container: container,
     element: container,
-    getElementPosition: () => -container.scrollLeft,
+    // * how far it is scrolled from the start: `scrollLeft` is negative in a right-to-left row
+    getElementPosition: () => -(axis === 'x' ? Math.abs(container.scrollLeft) : container.scrollTop),
     position: 'start',
-    axis: 'x'
+    axis,
+    forceDuration
   });
 }
 
@@ -68,7 +75,7 @@ export default function fastSmoothScroll(options: ScrollOptions) {
   options.axis ??= 'y';
   // return;
 
-  if(!liteMode.isAvailable('animations') || options.forceDuration === 0) {
+  if(!liteMode.isAvailable('motion') || options.forceDuration === 0) {
     options.forceDirection = FocusDirection.Static;
   }
 
@@ -89,14 +96,18 @@ export default function fastSmoothScroll(options: ScrollOptions) {
 }
 
 function scrollWithJs(options: ScrollOptions): Promise<void> {
-  const {element, container, getNormalSize, getElementPosition, transitionFunction, axis, margin, position, forceDirection, maxDistance, forceDuration} = options;
+  const {element, container, getNormalSize, getElementPosition, getElementSize, transitionFunction, axis, margin, position, forceDirection, maxDistance, forceDuration} = options;
   if(!isInDOM(element)) {
     cancelAnimationByKey(container);
     return Promise.resolve();
   }
 
-  const rectStartKey = axis === 'y' ? 'top' : 'left';
-  const rectEndKey = axis === 'y' ? 'bottom' : 'right';
+  // * a right-to-left row starts at its right edge, and its `scrollLeft` runs from 0 down to minus
+  // * the overflow: everything here is measured from the inline start, and written back with the sign
+  const isRTL = axis === 'x' && !!container.getBoundingClientRect && isElementRTL(container as HTMLElement);
+  const sign = isRTL ? -1 : 1;
+  const rectStartKey = axis === 'y' ? 'top' : (isRTL ? 'right' : 'left');
+  const rectEndKey = axis === 'y' ? 'bottom' : (isRTL ? 'left' : 'right');
   const sizeKey = axis === 'y' ? 'height' : 'width';
   const scrollSizeKey = axis === 'y' ? 'scrollHeight' : 'scrollWidth';
   const elementScrollSizeKey = axis === 'y' ? 'scrollHeight' : 'offsetWidth'; // can use offsetWidth for X, since it's almost same as scrollWidth
@@ -108,13 +119,17 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
 
   // const transformable = container.firstElementChild as HTMLElement;
 
-  const possibleElementPosition = elementRect[rectStartKey] - containerRect[rectStartKey];
+  const possibleElementPosition = (elementRect[rectStartKey] - containerRect[rectStartKey]) * sign;
   const elementPosition = getElementPosition ? getElementPosition({elementRect, containerRect, elementPosition: possibleElementPosition}) : possibleElementPosition;
-  const elementSize = element[elementScrollSizeKey]; // margin is exclusive in DOMRect
+  const elementSize = getElementSize ? getElementSize({elementRect}) : element[elementScrollSizeKey]; // margin is exclusive in DOMRect
 
+  /* const containerTrueSize = containerRect[sizeKey];
+  const containerNormalSize = getNormalSize ? getNormalSize({rect: containerRect}) : containerTrueSize;
+  const containerSize = containerNormalSize;
+  const containerSizeDifference = containerTrueSize - containerNormalSize; */
   const containerSize = getNormalSize ? getNormalSize({rect: containerRect}) : containerRect[sizeKey];
 
-  let scrollPosition = container[scrollPositionKey];
+  let scrollPosition = container[scrollPositionKey] * sign;
   const scrollSize = container[scrollSizeKey];
   /* const elementPosition = element.offsetTop;
   const elementSize = element.offsetHeight;
@@ -130,7 +145,7 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
       path = elementPosition - margin;
       break;
     case 'end':
-      path = elementRect[rectEndKey] /* + (elementSize - elementRect[sizeKey]) */ - containerRect[rectEndKey] + margin;
+      path = (elementRect[rectEndKey] /* + (elementSize - elementRect[sizeKey]) */ - containerRect[rectEndKey]) * sign + margin;
       break;
     // 'nearest' is not supported yet
     case 'nearest':
@@ -138,13 +153,24 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
       if(elementSize < containerSize) {
         path = (elementPosition + elementSize / 2) - (containerSize / 2);
       } else {
-        if(options.fallbackToElementStartWhenCentering && options.fallbackToElementStartWhenCentering !== element) {
+        if(
+          options.fallbackToElementStartWhenCentering &&
+          options.fallbackToElementStartWhenCentering !== element
+        ) {
           options.element = options.fallbackToElementStartWhenCentering;
           options.position = 'start';
           return scrollWithJs(options);
         }
 
         path = elementPosition - margin;
+      }
+
+      // * check if the scroll is possible at all
+      const maxScrollPosition = container[scrollSizeKey] - containerSize;
+      if((path + scrollPosition) > maxScrollPosition) {
+        path = Math.max(0, maxScrollPosition - scrollPosition);
+      } else if((path + scrollPosition) < 0) {
+        path = Math.min(0, -scrollPosition);
       }
 
       break;
@@ -165,7 +191,7 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
       break;
   } */
 
-  if(Math.abs(path - (margin || 0)) < 1) {
+  if(Math.abs(path/*  - (margin || 0) */) < 1) {
     cancelAnimationByKey(container);
     return Promise.resolve();
   }
@@ -262,7 +288,7 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
     const t = getProgress();
     const value = transition(t);
     const currentPath = path * (1 - value);
-    container[scrollPositionKey] = Math.round(target - currentPath);
+    container[scrollPositionKey] = Math.round(target - currentPath) * sign;
 
     return t < 1;
   };

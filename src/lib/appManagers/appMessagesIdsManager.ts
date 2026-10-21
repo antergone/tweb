@@ -1,12 +1,7 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MESSAGE_ID_OFFSET} from '../mtproto/mtproto_config';
-import getServerMessageId from './utils/messageId/getServerMessageId';
-import isLegacyMessageId from './utils/messageId/isLegacyMessageId';
+import {MESSAGE_ID_OFFSET} from '@appManagers/constants';
+import getServerMessageId from '@appManagers/utils/messageId/getServerMessageId';
+import isEphemeralMessageId from '@appManagers/utils/messageId/isEphemeralMessageId';
+import isLegacyMessageId from '@appManagers/utils/messageId/isLegacyMessageId';
 
 export class AppMessagesIdsManager {
   // private channelLocals: {[channelId: ChatId]: number} = {};
@@ -19,6 +14,7 @@ export class AppMessagesIdsManager {
 
   public generateMessageId(messageId: number, channelId?: ChatId) {
     if(
+      isEphemeralMessageId(messageId) ||
       !channelId ||
       !Number.isInteger(messageId) ||
       messageId <= 0
@@ -39,7 +35,7 @@ export class AppMessagesIdsManager {
   }
 
   public incrementMessageId(messageId: number, increment: number) {
-    return this.generateMessageId(getServerMessageId(messageId) + increment, isLegacyMessageId(messageId) ? 1 : 0);
+    return this.generateMessageId(getServerMessageId(messageId) + increment, isLegacyMessageId(messageId) ? 0 : 1);
   }
 
   public getMessageIdInfo(mid: number, channelId?: ChatId) {

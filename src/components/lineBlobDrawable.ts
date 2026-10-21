@@ -1,8 +1,4 @@
 /*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- *
  * Originally from:
  * https://github.com/evgeny-nadymov/telegram-react
  * Copyright (C) 2018 Evgeny Nadymov
@@ -12,9 +8,14 @@
 export const MAX_SPEED = 8.2;
 export const MIN_SPEED = 0.8;
 
-// import { MIN_SPEED, MAX_SPEED } from './BlobDrawable';
+// import { MIN_SPEED, MAX_SPEED } from '@components/BlobDrawable';
 
 type Radius = number[];
+
+// how far a blob's point goes towards its next place per frame at rest, scaled by MIN/MAX_SPEED
+export function getBlobSpeed() {
+  return 0.017 + 0.003 * Math.random();
+}
 
 export default class LineBlobDrawable {
   public maxRadius: number;
@@ -48,7 +49,7 @@ export default class LineBlobDrawable {
 
     const radDif = maxRadius - minRadius;
     radius[i] = minRadius + Math.random() * radDif;
-    speed[i] = 0.017 + 0.003 * Math.random();
+    speed[i] = getBlobSpeed();
   }
 
   private generateNextBlob() {

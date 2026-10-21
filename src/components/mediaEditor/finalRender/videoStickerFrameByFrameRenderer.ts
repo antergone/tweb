@@ -1,17 +1,17 @@
-import deferredPromise, {CancellablePromise} from '../../../helpers/cancellablePromise';
-import appDownloadManager from '../../../lib/appManagers/appDownloadManager';
-import {getMiddleware} from '../../../helpers/middleware';
-import {Document} from '../../../layer';
-import createVideo from '../../../helpers/dom/createVideo';
-import onMediaLoad from '../../../helpers/onMediaLoad';
-import apiManagerProxy from '../../../lib/mtproto/mtprotoworker';
-import handleVideoLeak from '../../../helpers/dom/handleVideoLeak';
-import {IS_FIREFOX} from '../../../environment/userAgent';
+import deferredPromise, {CancellablePromise} from '@helpers/cancellablePromise';
+import appDownloadManager from '@lib/appDownloadManager';
+import {getMiddleware} from '@helpers/middleware';
+import {Document} from '@layer';
+import createVideo from '@helpers/dom/createVideo';
+import onMediaLoad from '@helpers/onMediaLoad';
+import {ObjectURLScope} from '@helpers/objectUrl';
+import handleVideoLeak from '@helpers/dom/handleVideoLeak';
+import {IS_FIREFOX} from '@environment/userAgent';
 
-import {delay} from '../utils';
+import {delay} from '@components/mediaEditor/utils';
 
-import {StickerFrameByFrameRenderer} from './types';
-import {FRAMES_PER_SECOND} from './constants';
+import {StickerFrameByFrameRenderer} from '@components/mediaEditor/finalRender/types';
+import {FRAMES_PER_SECOND} from '@components/mediaEditor/finalRender/constants';
 
 export default class VideoStickerFrameByFrameRenderer implements StickerFrameByFrameRenderer {
   private duration: number = 0;
@@ -19,14 +19,17 @@ export default class VideoStickerFrameByFrameRenderer implements StickerFrameByF
   private video: HTMLVideoElement;
 
   private middleware = getMiddleware();
+  private objectURLs = new ObjectURLScope();
+  private destroyed = false;
 
   async init(doc: Document.document) {
     const blob = await appDownloadManager.downloadMedia({
       media: doc
     });
+    if(this.destroyed) return;
 
     const video = (this.video = createVideo({middleware: this.middleware.get()}));
-    video.src = await apiManagerProxy.invoke('createObjectURL', blob);
+    video.src = this.objectURLs.create(blob);
     // video.autoplay = true;
     video.controls = false;
     video.muted = true;
@@ -63,7 +66,9 @@ export default class VideoStickerFrameByFrameRenderer implements StickerFrameByF
   }
 
   destroy() {
+    this.destroyed = true;
     this.middleware.destroy();
+    this.objectURLs.dispose();
     this.video = null;
   }
 }

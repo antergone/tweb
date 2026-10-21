@@ -1,29 +1,24 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import App from '../../../../config/app';
-import DEBUG from '../../../../config/debug';
-import {CommonState as StateCommon, State, COMMON_STATE_INIT, STATE_INIT} from '../../../../config/state';
-import compareVersion from '../../../../helpers/compareVersion';
-import copy from '../../../../helpers/object/copy';
-import validateInitObject from '../../../../helpers/object/validateInitObject';
-import {UserAuth} from '../../../mtproto/mtproto_config';
-import sessionStorage from '../../../sessionStorage';
-import {recordPromiseBound} from '../../../../helpers/recordPromise';
-import {StoragesResults} from '../storages/loadStorages';
-import {LogTypes, logger} from '../../../logger';
-import {AccountSessionData, ActiveAccountNumber} from '../../../accounts/types';
-import StateStorage from '../../../stateStorage';
-import AccountController from '../../../accounts/accountController';
-import commonStateStorage from '../../../commonStateStorage';
-import {TrueDcId} from '../../../../types';
-import {getOldDatabaseState} from '../../../../config/databases/state';
-import {IDB} from '../../../files/idb';
-import createStorages from '../storages/createStorages';
-import isObject from '../../../../helpers/object/isObject';
+import App from '@config/app';
+import DEBUG from '@config/debug';
+import {CommonState as StateCommon, State, COMMON_STATE_INIT, STATE_INIT, AppTheme} from '@config/state';
+import compareVersion from '@helpers/compareVersion';
+import copy from '@helpers/object/copy';
+import validateInitObject from '@helpers/object/validateInitObject';
+import {UserAuth} from '@appManagers/constants';
+import sessionStorage from '@lib/sessionStorage';
+import {recordPromiseBound} from '@helpers/recordPromise';
+import {StoragesResults} from '@appManagers/utils/storages/loadStorages';
+import {LogTypes, logger} from '@lib/logger';
+import {AccountSessionData, ActiveAccountNumber} from '@lib/accounts/types';
+import StateStorage from '@lib/stateStorage';
+import AccountController from '@lib/accounts/accountController';
+import commonStateStorage from '@lib/commonStateStorage';
+import {TrueDcId} from '@types';
+import {getOldDatabaseState} from '@config/databases/state';
+import {IDB} from '@lib/files/idb';
+import createStorages from '@appManagers/utils/storages/createStorages';
+import isObject from '@helpers/object/isObject';
+import AppStorage from '@lib/storage';
 
 export type LoadStateResult = {
   state: State,
@@ -53,6 +48,12 @@ const REFRESH_KEYS: Array<keyof State> = [
   'stateCreatedTime',
   'maxSeenMsgId',
   'filtersArr'
+];
+
+const RESET_WITH_BUILD: Array<keyof State> = [
+  'appConfig',
+  'version',
+  'build'
 ];
 
 // const REFRESH_KEYS_WEEK = ['dialogs', 'allDialogsLoaded', 'updates', 'pinnedOrders'] as any as Array<keyof State>;
@@ -168,9 +169,31 @@ const STATE_STEPS = {
     const SKIP_VALIDATING_PATHS: Set<string> = new Set([
       'settings.themes'
     ]);
+
     validateInitObject(init, writer.state, (missingKey) => {
-      writer.push(missingKey as keyof typeof init, writer.state[missingKey as keyof typeof init]);
+      writer.push(
+        missingKey as keyof typeof init,
+        writer.state[missingKey as keyof typeof init]
+      );
     }, undefined, SKIP_VALIDATING_PATHS);
+  },
+  // Idempotent migration: legacy state stored AppTheme.settings as a single ThemeSettings;
+  // the new shape mirrors the MTProto Theme.settings array (one entry per BaseTheme), so
+  // switching dark/light keeps a cloud theme's per-base customizations. Wrap any leftover
+  // singular settings into a one-element array — getThemeSettings handles the rest.
+  MIGRATE_THEMES: (writer: ReturnType<typeof CommonStateWriter>) => {
+    const themes = writer.state.settings?.themes as AppTheme[] | undefined;
+    if(!themes) return;
+    let migrated = false;
+    themes.forEach((theme) => {
+      if(theme.settings && !Array.isArray(theme.settings)) {
+        theme.settings = [theme.settings as any];
+        migrated = true;
+      }
+    });
+    if(migrated) {
+      writer.push('settings', writer.state.settings);
+    }
   },
   VERSION: (writer: ReturnType<typeof StateWriter>) => {
     let newVersion: string, oldVersion: string;
@@ -179,6 +202,11 @@ const STATE_STEPS = {
         writer.reset();
       } else if(writer.state.build < 562) { // * drop filtersArr
         writer.push('filtersArr', copy(STATE_INIT.filtersArr));
+      } else if(writer.state.build < 677) {
+        writer.resetStorages.set('dialogs', []);
+        writer.push('allDialogsLoaded', copy(STATE_INIT.allDialogsLoaded));
+        writer.push('pinnedOrders', copy(STATE_INIT.pinnedOrders));
+        writer.push('botCommands', copy(STATE_INIT.botCommands));
       }
 
       if(compareVersion(writer.state.version, STATE_VERSION) !== 0) {
@@ -186,9 +214,9 @@ const STATE_STEPS = {
         oldVersion = writer.state.version;
       }
 
-      writer.push('appConfig', copy(STATE_INIT.appConfig));
-      writer.push('version', STATE_VERSION);
-      writer.push('build', BUILD);
+      RESET_WITH_BUILD.forEach((key) => {
+        writer.push(key, copy(STATE_INIT[key]));
+      });
     }
 
     return {newVersion, oldVersion};
@@ -246,7 +274,7 @@ async function loadStateForAccount(accountNumber: ActiveAccountNumber): Promise<
   const writer = StateWriter(log);
   writer.readFromArray(arr);
 
-  if(accountData?.userId) {
+  if(accountData.userId) {
     writer.state.authState = {_: 'authStateSignedIn'};
   }
 
@@ -255,6 +283,7 @@ async function loadStateForAccount(accountNumber: ActiveAccountNumber): Promise<
   STATE_STEPS.REFRESH(writer);
   STATE_STEPS.VALIDATE(writer, STATE_INIT);
   STATE_STEPS.VALIDATE(commonWriter, COMMON_STATE_INIT);
+  STATE_STEPS.MIGRATE_THEMES(commonWriter);
   const {newVersion, oldVersion} = STATE_STEPS.VERSION(writer);
 
   return {
@@ -264,7 +293,7 @@ async function loadStateForAccount(accountNumber: ActiveAccountNumber): Promise<
     oldVersion,
     resetStorages: writer.resetStorages,
     common: commonWriter.state,
-    userId: accountData?.userId
+    userId: accountData.userId
   };
 }
 
@@ -317,6 +346,7 @@ async function loadOldState(): Promise<LoadStateResult> {
   STATE_STEPS.REFRESH(writer);
   STATE_STEPS.VALIDATE(writer, STATE_INIT);
   STATE_STEPS.VALIDATE(commonWriter, COMMON_STATE_INIT);
+  STATE_STEPS.MIGRATE_THEMES(commonWriter);
   const {newVersion, oldVersion} = STATE_STEPS.VERSION(writer);
 
   if(DEBUG) {
@@ -334,6 +364,13 @@ async function loadOldState(): Promise<LoadStateResult> {
   if(langPack) {
     await commonStateStorage.set({langPack});
   }
+
+  const oldDb = getOldDatabaseState();
+  const clearPromises = oldDb.stores.map((store) => {
+    const stateStorage = new AppStorage(oldDb, store.name);
+    return stateStorage.clear();
+  });
+  await Promise.all(clearPromises);
 
   return {
     state: writer.state,
@@ -417,7 +454,7 @@ async function moveStoragesToMultiAccountFormat() {
 }
 
 async function checkIfHasMultiAccount() {
-  return !!(await AccountController.get(1));
+  return !!(await AccountController.get(1))[`dc${App.baseDcId}_auth_key`];
 }
 
 function deleteOldDatabase() {

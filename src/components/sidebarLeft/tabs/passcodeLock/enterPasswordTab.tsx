@@ -1,21 +1,19 @@
 import {createEffect, createSignal, onCleanup} from 'solid-js';
+import {keepMe} from '@helpers/keepMe';
+import {i18n} from '@lib/langPack';
+import {usePasscodeActions} from '@lib/passcode/actions';
+import {MAX_PASSCODE_LENGTH} from '@lib/passcode/constants';
+import SettingsTabLottieAnimation from '@components/settingsTabLottieAnimation';
+import {InputFieldTsx} from '@components/inputFieldTsx';
+import PasswordInputField from '@components/passwordInputField';
+import ripple from '@components/ripple';
+import Section from '@components/section';
+import type {AppPasscodeEnterPasswordTab} from '@components/solidJsTabs';
+import {useSuperTab} from '@components/solidJsTabs/superTabProvider';
+import Space from '@components/space';
+import commonStyles from '@components/sidebarLeft/tabs/passcodeLock/common.module.scss';
 
-import {MAX_PASSCODE_LENGTH} from '../../../../lib/passcode/constants';
-import {usePasscodeActions} from '../../../../lib/passcode/actions';
-
-import Section from '../../../section';
-import {InputFieldTsx} from '../../../inputFieldTsx';
-import Space from '../../../space';
-import {i18n} from '../../../../lib/langPack';
-import ripple from '../../../ripple'; ripple; // keep
-import PasswordInputField from '../../../passwordInputField';
-
-import type {AppPasscodeEnterPasswordTab} from '../solidJsTabs';
-import {useSuperTab} from '../solidJsTabs/superTabProvider';
-
-import LottieAnimation from './lottieAnimation';
-
-import commonStyles from './common.module.scss';
+keepMe(ripple);
 
 
 type AppPasscodeEnterPasswordTabClass = typeof AppPasscodeEnterPasswordTab;
@@ -46,21 +44,25 @@ const EnterPasswordTab = () => {
 
   const canSubmit = () => value() && value().length <= MAX_PASSCODE_LENGTH;
 
+  let isSubmitting = false;
   async function onSubmit(e: Event) {
     e.preventDefault();
 
-    if(!canSubmit()) return;
+    if(!canSubmit() || isSubmitting) return;
+    isSubmitting = true;
 
     try {
       await tab.payload.onSubmit(value(), tab, actions);
     } catch{
       setIsError(true);
+    } finally {
+      isSubmitting = false;
     }
   }
 
   return (
     <Section caption="PasscodeLock.Notice">
-      <LottieAnimation name="UtyanPasscode" />
+      <SettingsTabLottieAnimation name="UtyanPasscode" />
 
       <Space amount="1.125rem" />
 

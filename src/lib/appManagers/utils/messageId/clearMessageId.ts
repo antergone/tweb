@@ -1,10 +1,4 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MESSAGE_ID_OFFSET} from '../../../mtproto/mtproto_config';
+import {MESSAGE_ID_OFFSET} from '@appManagers/constants';
 
 export default function clearMessageId(messageId: number, toServer?: boolean) {
   if(messageId === undefined) {

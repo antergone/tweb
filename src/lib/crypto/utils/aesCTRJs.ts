@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
 import AES from '@cryptography/aes';
-import bytesFromWordss from '../../../helpers/bytes/bytesFromWordss';
+import bytesFromWordss from '@helpers/bytes/bytesFromWordss';
 
 export class Counter {
   public counter: Uint8Array;

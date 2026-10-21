@@ -1,19 +1,14 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import createElementFromMarkup from '../helpers/createElementFromMarkup';
-import {GrabEvent} from '../helpers/dom/attachGrabListeners';
-import safePlay from '../helpers/dom/safePlay';
-import setCurrentTime from '../helpers/dom/setCurrentTime';
-import limitSymbols from '../helpers/string/limitSymbols';
-import toHHMMSS from '../helpers/string/toHHMMSS';
-import appMediaPlaybackController from './appMediaPlaybackController';
-import {VideoTimestamp} from './appMediaViewerBase';
-import RangeSelector from './rangeSelector';
-import {observeResize} from './resizeObserver';
+import {getOverlayRoot} from '@helpers/appWindow';
+import createElementFromMarkup from '@helpers/createElementFromMarkup';
+import {GrabEvent} from '@helpers/dom/attachGrabListeners';
+import safePlay from '@helpers/dom/safePlay';
+import setCurrentTime from '@helpers/dom/setCurrentTime';
+import limitSymbols from '@helpers/string/limitSymbols';
+import toHHMMSS from '@helpers/string/toHHMMSS';
+import appMediaPlaybackController from '@components/appMediaPlaybackController';
+import {VideoTimestamp} from '@components/mediaViewer/base';
+import RangeSelector from '@components/rangeSelector';
+import {observeResize} from '@components/resizeObserver';
 
 const MIN_VIDEO_TIMESTAMP_SEGMENT_WIDTH = 7; // -2px padding will be 5px
 
@@ -44,20 +39,31 @@ export default class MediaProgressLine extends RangeSelector {
   // protected lastOnPlayTime: number;
   // protected lastOnPlayCurrentTime: number;
 
+  protected unobserveResize?: () => void;
+  protected activeSegmentIdx: number;
+  protected hoverRAF: number;
+
   constructor(protected options: {
     withTransition?: boolean,
     useTransform?: boolean,
     onSeekStart?: () => void,
     onSeekEnd?: () => void,
     onTimeUpdate?: (time: number) => void,
-    videoTimestamps?: VideoTimestamp[]
+    onHover?: (progress: number) => void,
+    onPointerOut?: () => void,
+    videoTimestamps?: VideoTimestamp[],
+    withTime?: boolean,
+    appendToTimeElement?: HTMLElement
   } = {}) {
     super({
+      ariaLabel: 'AccDescr.PlaybackPosition',
       step: 1000 / 60 / 1000,
       min: 0,
       max: 1,
       withTransition: options.withTransition,
-      useTransform: options.useTransform
+      useTransform: options.useTransform,
+      // * a playback bar follows the tape, not the line
+      keepLTR: true
     }, 0);
   }
 
@@ -85,6 +91,13 @@ export default class MediaProgressLine extends RangeSelector {
 
     this.media = media;
     this.streamable = streamable;
+
+    // Before anything draws: both bars divide by `max`, which is still the constructor's 1 until
+    // this runs. A media that is already positioned and paused — reopening a chat on a track you
+    // stopped halfway — never fires an event afterwards to correct a bar drawn against the wrong
+    // max, so it would sit at 100% for good.
+    this.setSeekMax(duration);
+
     if(!media.paused || media.currentTime > 0) {
       this.onPlay();
     }
@@ -92,7 +105,6 @@ export default class MediaProgressLine extends RangeSelector {
     this.setTimestampsClipPath();
 
     let wasPlaying = false;
-    this.setSeekMax(duration);
     this.setListeners();
     this.setHandlers({
       onMouseDown: () => {
@@ -111,7 +123,6 @@ export default class MediaProgressLine extends RangeSelector {
     });
   }
 
-  protected unobserveResize?: () => void;
   protected initResizeObserver() {
     this.unobserveResize?.();
     this.unobserveResize = observeResize(this.filledContainer, () => {
@@ -119,13 +130,23 @@ export default class MediaProgressLine extends RangeSelector {
     });
   }
 
-  protected activeSegmentIdx: number | null = null;
-  protected hoverRAF: number;
-
   protected onHover = (e: MouseEvent) => {
-    if(this.hoverRAF) return;
+    if(this.hoverRAF) {
+      return;
+    }
 
-    if(this.activeSegmentIdx != null) this.toggleSegment(this.activeSegmentIdx, false);
+    if(this.options.onHover) {
+      this.rect = this.container.getBoundingClientRect();
+      this.options.onHover(this.getValueByEvent({x: e.pageX, y: e.pageY, event: e}));
+    }
+
+    if(!this.filledContainer) {
+      return;
+    }
+
+    if(this.activeSegmentIdx !== undefined) {
+      this.toggleSegment(this.activeSegmentIdx, false);
+    }
 
     const bcr = this.filledContainer.getBoundingClientRect();
     const x = e.clientX - bcr.left;
@@ -140,20 +161,29 @@ export default class MediaProgressLine extends RangeSelector {
   }
 
   protected onPointerOut = () => {
-    this.toggleSegment(this.activeSegmentIdx, false);
-    this.activeSegmentIdx = null;
+    this.options.onPointerOut?.();
+
+    if(this.filledContainer) {
+      this.toggleSegment(this.activeSegmentIdx, false);
+      this.activeSegmentIdx = undefined;
+    }
   }
 
   protected toggleSegment(idx: number, active: boolean) {
-    const element = this.clipPathSvg.querySelector(`rect:nth-child(${idx + 1})`);
+    const element = this.clipPathSvg?.querySelector(`rect:nth-child(${idx + 1})`);
+    if(!element) {
+      return;
+    }
 
-    if(active) element?.setAttribute('data-active', 'true');
-    else element?.removeAttribute('data-active');
+    if(active) element.setAttribute('data-active', 'true');
+    else element.removeAttribute('data-active');
   }
 
-
   protected wrapProgressLinesInContainer() {
-    if(this.filledContainer) return;
+    if(this.filledContainer) {
+      return;
+    }
+
     this.container.classList.add('media-progress-line');
 
     this.filledContainer = document.createElement('div');
@@ -171,15 +201,16 @@ export default class MediaProgressLine extends RangeSelector {
     this.currentSegmentElement = document.createElement('div');
     this.currentTimeInfoElement.classList.add('media-progress-line__current-segment');
 
-    this.currentTimeInfoElement.append(this.currentSegmentElement, this.currentTimeElement);
+    this.currentTimeInfoElement.append(...[
+      this.options.appendToTimeElement,
+      this.currentSegmentElement,
+      this.currentTimeElement
+    ].filter(Boolean));
 
     this.filledContainer.append(this.filled, this.filledLoad);
 
     this.container.prepend(this.filledContainer);
     this.container.append(thumb, this.currentTimeInfoElement);
-
-    this.container.addEventListener('pointermove', this.onHover);
-    this.container.addEventListener('pointerout', this.onPointerOut);
 
     this.initResizeObserver();
   }
@@ -190,7 +221,9 @@ export default class MediaProgressLine extends RangeSelector {
   }
 
   protected updateTimeAndSegment(x: number, width: number) {
-    if(!this.media || !this.currentTimeInfoElement) return;
+    if(!this.media || !this.currentTimeInfoElement) {
+      return;
+    }
 
     if(x < 0 || x > width) {
       this.clearTimeAndSegment();
@@ -218,7 +251,9 @@ export default class MediaProgressLine extends RangeSelector {
     this.removeClipPathFromDOM();
     this.segments = [];
 
-    if(!this.options.videoTimestamps?.length) return;
+    if(!this.options.videoTimestamps?.length && !this.options.withTime) {
+      return;
+    }
 
     this.wrapProgressLinesInContainer();
 
@@ -226,7 +261,9 @@ export default class MediaProgressLine extends RangeSelector {
     const totalWidth = bcr.width;
 
     const segments = this.segments = this.getTimestampSegments(totalWidth);
-    if(!segments?.length) return;
+    if(!segments?.length) {
+      return;
+    }
 
     const margin = 1;
 
@@ -251,18 +288,21 @@ export default class MediaProgressLine extends RangeSelector {
       </svg>
     `);
 
-    document.body.append(this.clipPathSvg);
+    getOverlayRoot().append(this.clipPathSvg);
 
     this.filledContainer.style.clipPath = `url(#${clipPathId})`;
   }
 
   protected getTimestampSegments(totalWidth: number) {
     const {videoTimestamps} = this.options;
-    if(!videoTimestamps?.length || !this.filledContainer) return [];
+    if(!videoTimestamps?.length || !this.filledContainer) {
+      return [];
+    }
 
     const duration = this.media.duration;
-
-    if(!duration) return [];
+    if(!duration) {
+      return [];
+    }
 
     const timePoints = videoTimestamps.map(({time}) => time)
     .filter((time) => time >= 0 && time <= duration)
@@ -278,7 +318,9 @@ export default class MediaProgressLine extends RangeSelector {
       const left = Math.max(prevRight, timePoints[i] / duration * totalWidth);
       let right = timePoints[i + 1] / duration * totalWidth;
 
-      if(right <= left) continue;
+      if(right <= left) {
+        continue;
+      }
 
       right = Math.max(right, left + MIN_VIDEO_TIMESTAMP_SEGMENT_WIDTH);
       prevRight = right;
@@ -291,7 +333,9 @@ export default class MediaProgressLine extends RangeSelector {
         time: timePoints[i]
       });
 
-      if(right === totalWidth) break;
+      if(right === totalWidth) {
+        break;
+      }
     }
 
     return result;
@@ -347,25 +391,36 @@ export default class MediaProgressLine extends RangeSelector {
   };
 
   protected scrub(e: GrabEvent) {
-    const scrubTime = super.scrub(e, this.snapScrubValue);
+    let scrubTime = super.scrub(e, this.snapScrubValue);
+    // avoid `ended` when scrubbing to the end
+    if(this.media.duration && scrubTime >= this.media.duration) {
+      scrubTime = this.media.duration - 0.1;
+    }
     setCurrentTime(this.media, scrubTime);
     return scrubTime;
   }
 
   protected snapScrubValue = (value: number) => {
-    if(!this.segments?.length) return value;
+    if(!this.segments?.length) {
+      return value;
+    }
 
     const totalWidth = this.segments[this.segments.length - 1].right;
     const x = value / this.media.duration * totalWidth;
     for(const segment of this.segments) {
-      if(segment.left - 2 <= x && x <= segment.left + 3) return segment.time;
+      if(segment.left - 2 <= x && x <= segment.left + 3) {
+        return segment.time;
+      }
     }
 
     return value;
   }
 
   protected setLoadProgress() {
-    if(appMediaPlaybackController.isSafariBuffering(this.media)) return;
+    if(appMediaPlaybackController.isSafariBuffering(this.media)) {
+      return;
+    }
+
     const buf = this.media.buffered;
     const numRanges = buf.length;
 
@@ -399,7 +454,9 @@ export default class MediaProgressLine extends RangeSelector {
   }
 
   public setProgress() {
-    if(appMediaPlaybackController.isSafariBuffering(this.media)) return;
+    if(appMediaPlaybackController.isSafariBuffering(this.media)) {
+      return;
+    }
 
     // fix jumping progress on play
     // let currentTime: number;
@@ -424,6 +481,11 @@ export default class MediaProgressLine extends RangeSelector {
     this.media.addEventListener('pause', this.onTimeUpdate);
     this.media.addEventListener('timeupdate', this.onTimeUpdate);
     this.streamable && this.media.addEventListener('progress', this.onProgress);
+
+    if(this.options.onHover || this.options.videoTimestamps || this.options.withTime) {
+      this.container.addEventListener('pointermove', this.onHover);
+      this.container.addEventListener('pointerout', this.onPointerOut);
+    }
   }
 
   public removeListeners() {

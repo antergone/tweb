@@ -1,8 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+@use "sass:string";
+@use "../../shared" as *;
 
 .popup-peer {
   $parent: ".popup";
@@ -25,39 +22,47 @@
       width: min-content;
     }
 
+    // footer buttons (the `footer` option) stand as far from the popup's edges as in any other popup:
+    // the container's padding is the row of text buttons' and the copy's, not theirs
+    &-footer {
+      margin: 0 -.5rem -.75rem;
+    }
+
     &-title {
       font-size: 1.25rem;
       font-weight: var(--font-weight-bold);
       // margin-bottom: .125rem;
 
       &:not(:first-child) {
-        padding-left: 1rem;
+        padding-inline-start: 1rem;
       }
     }
 
     &-description {
       margin-top: 0;
       margin-bottom: 0;
-      min-width: unquote('min(100%, 15rem)');
+      min-width: string.unquote('min(100%, 15rem)');
       max-width: fit-content;
       line-height: var(--line-height);
       padding: .625rem 1rem .5rem;
       white-space: pre-wrap;
+      flex: 0 0 auto;
 
       @include text-overflow(false);
     }
   }
 
-  .checkbox-field {
-    display: flex;
-    align-items: center;
-    min-height: 3rem;
-    height: auto;
+  .popup-description-features {
     margin: 0;
-    padding: .25rem 1.125rem;
+    padding-inline-start: 1.25rem;
 
-    .checkbox-box {
-      left: auto;
+    li {
+      margin-bottom: .25rem;
+      list-style: disc;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
     }
   }
 }

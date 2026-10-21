@@ -1,11 +1,11 @@
 import {Component, createSelector, JSX} from 'solid-js';
 
-import {IS_APPLE} from '../../../../environment/userAgent';
+import {IS_APPLE} from '@environment/userAgent';
 
-import {IconTsx} from '../../../iconTsx';
-import ripple from '../../../ripple'; ripple; // keep
+import {IconTsx} from '@components/iconTsx';
+import ripple from '@components/ripple'; ripple; // keep
 
-import styles from './shortcutBuilder.module.scss';
+import styles from '@components/sidebarLeft/tabs/passcodeLock/shortcutBuilder.module.scss';
 
 
 export type ShortcutKey = 'Ctrl' | 'Alt' | 'Shift' | 'Meta';
@@ -22,7 +22,7 @@ const ShortcutBuilder: Component<{
 
   const getKeyContent = (key: ShortcutKey): JSX.Element => {
     if(key === 'Meta') {
-      return <IconTsx icon={IS_APPLE ? 'mac_command_key' : 'win_key'} />;
+      return <IconTsx icon={IS_APPLE ? 'mac_command_key' : 'win_key_filled'} />;
     }
     return <span>{key}</span>;
   };
@@ -54,6 +54,7 @@ const ShortcutBuilder: Component<{
               [styles.KeyButtonFirst]: idx === 0,
               [styles.KeyButtonLast]: idx === array.length - 1
             }}
+            aria-pressed={isSelected(key)}
             onClick={[onKeyClick, key]}
           >
             {getKeyContent(key)}

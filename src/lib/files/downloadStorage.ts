@@ -1,31 +1,26 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import deferredPromise from '../../helpers/cancellablePromise';
-import makeError from '../../helpers/makeError';
-import fileNameRFC from '../../helpers/string/fileNameRFC';
-import appManagersManager from '../appManagers/appManagersManager';
-import DownloadWriter from './downloadWriter';
-import FileStorage from './fileStorage';
+import deferredPromise from '@helpers/cancellablePromise';
+import makeError from '@helpers/makeError';
+import fileNameRFC from '@helpers/string/fileNameRFC';
+import appManagersManager from '@appManagers/appManagersManager';
+import DownloadWriter from '@lib/files/downloadWriter';
+import FileStorage from '@lib/files/fileStorage';
 
 export default class DownloadStorage implements FileStorage {
   public getFile(fileName: string): Promise<any> {
     return Promise.reject(makeError('NO_ENTRY_FOUND'));
   }
 
-  public prepareWriting({fileName, downloadId, size}: {
+  public prepareWriting({fileName, downloadId, size, mimeType}: {
     fileName: string,
     downloadId: string,
-    size: number
+    size: number,
+    mimeType?: string
   }) {
+    // Android Chrome ignores RFC5987-only `filename*=` and sniffs an extension from the body if Content-Type is missing.
+    const asciiFileName = fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '\\$&');
     const headers = {
-      // 'Content-Type': 'application/octet-stream; charset=utf-8',
-      // 'Content-Type': EXTENSION_MIME_TYPE_MAP[fileName.split('.').pop() as keyof typeof EXTENSION_MIME_TYPE_MAP] || 'application/octet-stream; charset=utf-8',
-      'Content-Disposition': 'attachment; filename*=UTF-8\'\'' + fileNameRFC(fileName),
-      // 'Content-Disposition': `attachment; filename="${fileNameRFC(fileName)}"`,
+      'Content-Type': mimeType || 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${asciiFileName}"; filename*=UTF-8''${fileNameRFC(fileName)}`,
       ...(size ? {'Content-Length': size} : {})
     };
 

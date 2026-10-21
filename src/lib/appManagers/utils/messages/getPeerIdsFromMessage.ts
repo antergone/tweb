@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {Message, MessageAction, MessageMedia, MessageReplyHeader, Peer, WebPage, WebPageAttribute} from '../../../../layer';
-import getPeerId from '../peers/getPeerId';
+import {Message, MessageAction, MessageMedia, MessageReplyHeader, Peer, WebPage, WebPageAttribute} from '@layer';
+import getPeerId from '@appManagers/utils/peers/getPeerId';
 
 export default function getPeerIdsFromMessage(message: Message.message | Message.messageService) {
   const peerIds: number[] = [
@@ -55,13 +49,15 @@ export default function getPeerIdsFromMessage(message: Message.message | Message
     const userIds: UserId[] = [
       ...((action as MessageAction.messageActionChatAddUser).users || []),
       (action as MessageAction.messageActionChatDeleteUser).user_id,
-      (action as MessageAction.messageActionChatJoinedByLink).inviter_id
+      (action as MessageAction.messageActionChatJoinedByLink).inviter_id,
+      (action as (MessageAction.messageActionNewCreatorPending | MessageAction.messageActionChangeCreator)).new_creator_id
     ];
     peerIds.push(...userIds.filter(Boolean).map((userId) => userId.toPeerId()));
 
     const chatIds: ChatId[] = [
       (action as MessageAction.messageActionChatMigrateTo).channel_id,
-      (action as MessageAction.messageActionChannelMigrateFrom).chat_id
+      (action as MessageAction.messageActionChannelMigrateFrom).chat_id,
+      (action as MessageAction.messageActionChangeCommunity | MessageAction.messageActionChatJoinedViaCommunity).community_id
     ];
     peerIds.push(...chatIds.filter(Boolean).map((chatId) => chatId.toPeerId(true)));
 

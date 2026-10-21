@@ -1,8 +1,4 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+@use "../shared" as *;
 
 $btn-menu-z-index: 4;
 
@@ -30,7 +26,7 @@ $btn-menu-z-index: 4;
   font-size: 1.5rem;
   line-height: 1;
   border-radius: 50% !important;
-  color: var(--secondary-text-color);
+  color: var(--primary-text-color);
   background-color: transparent;
   border: none;
   padding: .5rem;
@@ -62,7 +58,6 @@ $btn-menu-z-index: 4;
   transition: transform var(--btn-corner-transition) !important;
   transform: translate3d(0, var(--translateY), 0);
   z-index: 1;
-  user-select: none;
   background-color: var(--primary-color);
   text-align: center;
   font-size: 1.5rem;
@@ -77,15 +72,24 @@ $btn-menu-z-index: 4;
   justify-content: center;
   padding: 0 !important;
 
+  // a11y: a corner button slid out of view is no tab stop
+  :where(.a11y) & {
+    visibility: hidden;
+  }
+
   @include hover() {
     background-color: var(--dark-primary-color);
   }
 
   &.is-visible {
     --translateY: 0;
+
+    :where(.a11y) & {
+      visibility: visible;
+    }
   }
 
-  body.animation-level-0 & {
+  @include animation-level-below(2) {
 		transition: none !important;
   }
 
@@ -101,17 +105,21 @@ $btn-menu-z-index: 4;
 }
 
 .btn-menu {
+  --btn-menu-padding: .25rem;
   --transform-extra: translateX(0);
   --transform-origin-x: center;
   --transform-origin-y: center;
   position: absolute;
   z-index: $btn-menu-z-index;
   top: 100%;
+
+  &-submenu {
+    z-index: $btn-menu-z-index + 1;
+  }
   // transform: scale(.8) !important;
   font-size: 1rem;
   min-width: 11.25rem;
   // max-width: 16.25rem;
-  -webkit-user-select: none; /* disable selection/Copy of UIWebView */
   -webkit-touch-callout: none; /* disable the IOS popup when long-press on a link */
   width: max-content;
   transform-origin: var(--transform-origin-x) var(--transform-origin-y);
@@ -119,7 +127,7 @@ $btn-menu-z-index: 4;
   &,
   &-items {
     box-shadow: var(--menu-box-shadow);
-    padding: .3125rem 0;
+    padding: var(--btn-menu-padding) 0;
     border-radius: $border-radius-medium;
   }
 
@@ -129,6 +137,11 @@ $btn-menu-z-index: 4;
     opacity: 0;
     transform: var(--transform-extra) scale(.8);
     transition: opacity var(--btn-menu-transition), transform var(--btn-menu-transition), visibility var(--btn-menu-transition);
+
+    // reduced: a menu fades where it opens, in and out
+    @include animation-level-below(2) {
+      transform: var(--transform-extra);
+    }
 
     body.animation-level-0 & {
       transition: none;
@@ -243,7 +256,7 @@ $btn-menu-z-index: 4;
   &.bottom-center {
     --transform-origin-x: center;
     --transform-origin-y: top;
-    --transform-extra: translateX(calc(-50% + var(--parent-half-width)));
+    --transform-extra: translateX(calc((-50% + var(--parent-half-width)) * var(--reflect)));
     inset-block: 100% auto;
     inset-inline: 0 auto;
   }
@@ -299,9 +312,9 @@ $btn-menu-z-index: 4;
     text-align: start;
     font-size: var(--font-size-14);
     line-height: var(--line-height-14);
-    border-radius: .3125rem;
-    margin-inline: .3125rem;
-    font-weight: 500;
+    border-radius: $border-radius;
+    margin-inline: var(--btn-menu-padding);
+    font-weight: var(--font-weight-bold);
     transform: scale(1);
 
     &.a {
@@ -313,17 +326,42 @@ $btn-menu-z-index: 4;
       }
     }
 
-    @include animation-level(2) {
+    @include animation-level(1) {
       transition: transform .1s var(--transition-standard-easing);
     }
 
     &.submenu-trigger {
       cursor: default !important;
-      padding-right: 6px;
+      padding-inline-end: 6px;
     }
 
-    &:not(.submenu-trigger):active {
+    &.is-static {
+      cursor: default !important;
+      pointer-events: none !important;
+      color: var(--secondary-text-color);
+    }
+
+    &:not(.submenu-trigger):not(.btn-menu-search):active {
       transform: scale(.96);
+    }
+
+    &.is-disabled {
+      cursor: default !important;
+      pointer-events: none !important;
+      opacity: var(--disabled-opacity);
+    }
+
+    &.is-loading {
+      cursor: default !important;
+      pointer-events: none !important;
+
+      > .btn-menu-item-icon.tgico {
+        font-size: 0;
+      }
+
+      > .btn-menu-item-icon > .tgico {
+        visibility: hidden;
+      }
     }
 
     // background-blend-mode: overlay, normal;
@@ -335,6 +373,12 @@ $btn-menu-z-index: 4;
 
     &.danger {
       @include hover-background-effect(red);
+    }
+
+    &.btn-menu-search {
+      @include hover-background-effect(transparent);
+      cursor: default !important;
+      margin-top: var(--btn-menu-padding);
     }
 
     &-icon {
@@ -368,6 +412,36 @@ $btn-menu-z-index: 4;
       .media-photo {
         width: inherit;
         height: inherit;
+      }
+    }
+
+    &-preloader {
+      width: 100%;
+      height: 100%;
+
+      .preloader-path {
+        stroke: currentColor;
+      }
+    }
+
+    &.with-subtitle {
+      height: 44px;
+    }
+
+    &.with-subtitle &-icon {
+      margin-top: .5rem;
+    }
+
+    &-input {
+      border: none;
+      outline: none;
+      padding: 0;
+      background-color: transparent;
+      font-size: var(--font-size-14);
+      line-height: var(--line-height-16);
+
+      &::placeholder {
+        color: var(--secondary-text-color);
       }
     }
 
@@ -465,8 +539,6 @@ $btn-menu-z-index: 4;
       // --icon-margin: .5rem;
       font-size: .75rem;
     }
-
-
     .submenu-label {
       display: flex;
       justify-content: space-between;
@@ -479,9 +551,10 @@ $btn-menu-z-index: 4;
         flex: 1 1 auto;
       }
 
-      .tgico {
+      // the arrow only: a label's text may hold icons of its own (a premium star)
+      &-arrow {
         font-size: 20px;
-        transform: rotate(-90deg);
+        transform: rotate(calc(-90deg * var(--reflect)));
         color: var(--secondary-color);
       }
     }
@@ -496,12 +569,8 @@ $btn-menu-z-index: 4;
     }
 
     &-avatar {
-      // width: 1.5rem !important;
-      // height: 1.5rem !important;
-      // display: flex;
-      // align-items: center;
-      // justify-content: center;
-      // position: relative;
+      align-self: center;
+      margin-top: 0 !important;
 
       &.active:before {
         --offset: -3px;
@@ -513,6 +582,32 @@ $btn-menu-z-index: 4;
         left: var(--offset);
         border: 1.5px solid var(--primary-color);
         border-radius: inherit;
+      }
+    }
+
+    .checkbox-field {
+      --size: 1.25rem;
+      order: 0;
+      margin: 0;
+      margin-inline-end: var(--icon-margin);
+
+      .checkbox-box {
+        &-border,
+        &-background {
+          display: none;
+        }
+
+        &-check use {
+          stroke: var(--primary-text-color);
+        }
+      }
+    }
+
+    &.has-checkbox {
+      padding-inline-end: 1.5rem;
+
+      .btn-menu-item-text {
+        order: 1;
       }
     }
   }
@@ -543,15 +638,14 @@ $btn-menu-z-index: 4;
     bottom: 0;
     z-index: $btn-menu-z-index;
     cursor: default;
-    user-select: none;
     //background-color: rgba(0, 0, 0, .2);
   }
 
   /* &-toggle  */&-overlay {
     left: -100vw;
     right: -100vw;
-    top: -100vh;
-    bottom: -100vh;
+    top: calc(var(--100vh) * -1);
+    bottom: calc(var(--100vh) * -1);
 
     width: auto !important;
     max-width: none !important;
@@ -563,14 +657,13 @@ $btn-menu-z-index: 4;
 
   &-footer {
     height: 2rem;
-    // background: var(--background-color-true);
     display: flex;
     align-items: center;
     justify-content: center;
     border-bottom-left-radius: inherit;
     border-bottom-right-radius: inherit;
     font-size: .875rem;
-    color: #a2acb4;
+    color: var(--input-placeholder-color);
     font-weight: 500;
     font-size: 12px;
     // cursor: default;
@@ -582,8 +675,9 @@ $btn-menu-z-index: 4;
 
   hr {
     padding: 0;
-    margin: .3125rem 0;
+    margin: var(--btn-menu-padding) 0;
     display: block !important;
+    pointer-events: none;
 
     margin-left: auto;
     margin-right: auto;
@@ -617,9 +711,7 @@ $btn-menu-z-index: 4;
       transform: scale(.8);
       transform-origin: bottom left;
 
-      @include animation-level(2) {
-        transition: opacity var(--transition-standard-in), transform var(--transition-standard-in);
-      }
+      @include animation-level-transition(opacity var(--transition-standard-in), transform var(--transition-standard-in));
 
       &.is-visible {
         opacity: 1;
@@ -729,13 +821,12 @@ $btn-menu-z-index: 4;
     }
 
     &-description {
-      --link-color: var(--primary-color);
       position: relative;
       font-size: 12px;
       color: var(--secondary-text-color);
       text-align: center;
       line-height: 14px;
-      margin-top: .3125rem;
+      margin-top: var(--btn-menu-padding);
     }
 
     &-bubble {
@@ -755,7 +846,7 @@ $btn-menu-z-index: 4;
         --offset: calc(var(--height) / 2);
         width: var(--size);
         height: calc(var(--size) / 2);
-        right: var(--offset);
+        inset-inline-end: var(--offset);
         // left: var(--offset);
         bottom: calc(var(--size) / -2);
         border-top: 0;
@@ -858,6 +949,44 @@ $btn-menu-z-index: 4;
       padding: .0625rem;
     }
   }
+
+  &-select {
+    padding-block: 0;
+
+    &.is-height-constrained {
+      display: flex;
+      flex-direction: column;
+
+      > .btn-menu-search,
+      > .btn-menu-search-delimiter {
+        flex: 0 0 auto;
+      }
+
+      > .btn-menu-search-scrollable {
+        flex: 0 1 auto;
+        min-height: 0;
+      }
+    }
+
+    &-text-faded {
+      opacity: 0.3;
+    }
+  }
+
+  &-search-delimiter {
+    height: 1px;
+    background-color: var(--border-color);
+    margin: 0 var(--btn-menu-padding);
+    margin-bottom: 0;
+  }
+
+  &-search-scrollable {
+    position: relative;
+
+    .scrollable {
+      padding-block: var(--btn-menu-padding);
+    }
+  }
 }
 
 .btn-menu-item-with-auxiliary-text {
@@ -873,6 +1002,64 @@ $btn-menu-z-index: 4;
   opacity: 0.5;
 }
 
+.reaction-context-menu {
+  width: min(15rem, calc(100vw - 2rem)) !important;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+
+  &-participant {
+    min-width: 0;
+  }
+
+  &-peer {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+
+    &-title,
+    &-date {
+      @include text-overflow();
+    }
+
+    &-date {
+      color: var(--secondary-text-color);
+      font-size: var(--font-size-12);
+      font-weight: 400;
+      line-height: var(--line-height-14);
+    }
+  }
+
+  &-delete {
+    width: 1.5rem;
+    height: 1.5rem;
+    margin-inline: .5rem -.25rem;
+    flex: 0 0 auto;
+    color: var(--secondary-text-color);
+    font-size: 1rem;
+    opacity: 0;
+    pointer-events: none;
+
+    @include animation-level(1) {
+      transition: opacity var(--transition-standard-in);
+    }
+  }
+
+  html.no-touch &-participant:hover &-delete,
+  &-participant:focus-within &-delete {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  &-hint {
+    padding: .5rem .75rem;
+    max-width: 15rem;
+    color: var(--secondary-text-color);
+    font-size: var(--font-size-12);
+    line-height: var(--line-height-14);
+  }
+}
+
 .floating-button-menu-container {
   position: fixed;
   transition: .2s;
@@ -883,24 +1070,35 @@ $btn-menu-z-index: 4;
     transform-origin: 0 0;
     transform: scale(0.5);
     opacity: 0;
+
+    // reduced: it fades where it stands
+    @include animation-level-below(2) {
+      transform: none;
+    }
+  }
+
+  @include animation-level(0) {
+    transition: none;
   }
 }
 
 .btn-primary {
-  border-radius: $border-radius-medium;
+  border-radius: $button-border-radius;
   width: 100%;
   text-align: center;
-  height: 54px;
+  height: $button-height;
   border: none;
   font-weight: var(--font-weight-bold);
   cursor: pointer;
   overflow: hidden;
   position: relative;
   padding: 0; // new
-  transition: .2s opacity;
+  transition: opacity var(--transition-standard-out), background-color var(--transition-standard-out), color var(--transition-standard-out);
+  line-height: var(--line-height);
+  text-transform: uppercase;
 
   @include hover() {
-    transition: /* .2s background-color,  */.2s opacity;
+    // transition: /* .2s background-color,  */.2s opacity;
     background: var(--dark-primary-color);
   }
 
@@ -929,8 +1127,7 @@ $btn-menu-z-index: 4;
   > svg,
   use {
     height: calc(100% - 20px);
-    inset-inline-end: 15px;
-    left: auto;
+    inset-inline: auto 15px;
   }
 
   &:disabled {
@@ -946,15 +1143,10 @@ $btn-menu-z-index: 4;
   display: flex;
   align-items: center;
   padding: 0 1rem;
-  height: 3rem;
-  //width: auto;
-  //text-transform: capitalize;
+  height: $button-height;
+  text-transform: unset;
   font-weight: normal;
   line-height: var(--line-height); // * it centers the text
-
-  @include respond-to(handhelds) {
-    height: 3rem;
-  }
 
   @include hover-background-effect();
 
@@ -1002,9 +1194,7 @@ $btn-menu-z-index: 4;
     line-height: 1;
     font-weight: var(--font-weight-bold);
 
-    @include animation-level(2) {
-      transition: width 0.2s, background-color .2s, color .2s;
-    }
+    @include animation-level-transition(width 0.2s, background-color .2s, color .2s);
 
     &.active {
       background-color: var(--light-primary-color) !important;
@@ -1042,10 +1232,10 @@ $btn-menu-z-index: 4;
 
   &:not(.btn-primary):not(.btn-corner).menu-open {
     background-color: var(--light-secondary-text-color);
-  }
 
-  .btn-menu {
-    margin-top: .5rem;
+    &.primary {
+      background-color: var(--light-primary-color);
+    }
   }
 }
 
@@ -1072,12 +1262,17 @@ $btn-menu-z-index: 4;
 }
 
 .btn-secondary {
-  margin-top: -1rem !important;
+  margin-top: -1rem;
 }
 
 .btn-color-primary {
   background: var(--primary-color);
   color: #fff;
+
+  // the contrast-checked fill, with the a11y layer (Increase Contrast is part of it)
+  :where(.a11y) & {
+    background: var(--primary-button-color, var(--primary-color));
+  }
 
   /* .c-ripple__circle {
     background-color: var(--light-primary-color);
@@ -1094,7 +1289,11 @@ $btn-menu-z-index: 4;
   font-size: 1.5rem;
   position: relative;
   border-radius: 50%;
-  backdrop-filter: blur(25px);
+  // No backdrop blur: over a playing video it is re-rendered every frame, and the call panels
+  // stuttered with it.
+  // These are native <button>s, so the UA stylesheet paints a 2px outset
+  // ButtonBorder around every circle unless it is cleared here.
+  border: none;
 
   &-container {
     display: flex;
@@ -1102,19 +1301,6 @@ $btn-menu-z-index: 4;
     align-items: center;
     cursor: pointer;
     width: var(--call-button-size);
-
-    &.disabled {
-      pointer-events: none;
-
-      .call-button { // ! fix backdrop-filter transition
-        pointer-events: none;
-
-        &,
-        &-text {
-          opacity: .8;
-        }
-      }
-    }
   }
 
   &-text {
@@ -1122,16 +1308,15 @@ $btn-menu-z-index: 4;
     font-size: .875rem;
     margin-top: .25rem;
 
-    @include animation-level(2) {
+    @include animation-level(1) {
       transition: opacity var(--transition-standard-in);
     }
   }
 
-  @include animation-level(2) {
+  @include animation-level(1) {
     transition: background-color var(--transition-standard-in), opacity var(--transition-standard-in);
   }
 
-  & + &,
   &-container + &-container {
     margin-inline-start: var(--call-button-margin);
   }

@@ -1,8 +1,8 @@
-import assumeType from '../../../helpers/assumeType';
-import {Message} from '../../../layer';
-import {i18n} from '../../../lib/langPack';
+import assumeType from '@helpers/assumeType';
+import {Message} from '@layer';
+import {i18n} from '@lib/langPack';
 
-import wrapPeerTitle from '../../wrappers/peerTitle';
+import wrapPeerTitle from '@components/wrappers/peerTitle';
 
 
 type Args = {
@@ -14,13 +14,13 @@ type Args = {
   groupedMessages?: Message.message[];
 };
 
-export default async function addPaidServiceMessage({isAnyGroup, bubble, message, our, peerId, groupedMessages}: Args) {
+export default function addPaidServiceMessage({isAnyGroup, bubble, message, our, peerId, groupedMessages}: Args) {
   assumeType<Message.message>(message);
 
   const paidStars = Number(message.paid_message_stars)
   const repayRequest = message.repayRequest;
 
-  if(paidStars && !isAnyGroup) {
+  if(paidStars && !isAnyGroup) return (async() => {
     bubble.classList.add('has-fake-service', 'is-forced-rounded');
     bubble.dataset.isPaid = '1';
 
@@ -34,12 +34,12 @@ export default async function addPaidServiceMessage({isAnyGroup, bubble, message
       i18n('PaidMessages.FailedToPayForMessage', [messageCount, i18n('Stars', [totalStars])]) :
       our ?
         i18n('PaidMessages.YouPaidToSendMessages', [messageCount, i18n('Stars', [totalStars])]) :
-        i18n('PaidMessages.YouReceivedStarsFrom', [i18n('Stars', [totalStars]), await wrapPeerTitle({peerId: peerId, onlyFirstName: true})])
+        i18n('PaidMessages.YouReceivedStarsFrom', [await wrapPeerTitle({peerId: peerId, onlyFirstName: true}), i18n('Stars', [totalStars])])
 
     i18nElement.classList.add('service-msg-i18n-element');
 
     paidServiceMessage.append(i18nElement);
 
     bubble.prepend(paidServiceMessage);
-  }
+  })();
 }

@@ -1,13 +1,7 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
 import {createEffect} from 'solid-js';
-import {MessageEntity, TextWithEntities} from '../../layer';
-import parseEntities from './parseEntities';
-import wrapRichText from './wrapRichText';
+import {MessageEntity, TextWithEntities} from '@layer';
+import parseEntities from '@lib/richTextProcessor/parseEntities';
+import wrapRichText from '@lib/richTextProcessor/wrapRichText';
 
 export default function wrapEmojiText(text: string, isDraft = false, entities?: MessageEntity[]) {
   if(!text) return wrapRichText('');

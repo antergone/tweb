@@ -1,7 +1,7 @@
+import liteMode from '@helpers/liteMode';
 import {resolveElements} from '@solid-primitives/refs';
-import {createListTransition} from './createListTransition';
-import {createEffect, createRoot, onCleanup, JSX, Accessor, FlowComponent} from 'solid-js';
-import liteMode from '../liteMode';
+import {createListTransition} from '@vendor/createListTransition';
+import {Accessor, createEffect, createRoot, FlowComponent, JSX, onCleanup} from 'solid-js';
 
 export const TransitionGroup: FlowComponent<{
   noWait?: Accessor<boolean>,
@@ -51,7 +51,7 @@ export const TransitionGroup: FlowComponent<{
         dispose?.();
       }
 
-      if(props.noWait?.() || !liteMode.isAvailable('animations')) {
+      if(props.noWait?.() || !liteMode.isAvailable('motion')) {
         finishRemoved(removed);
         return;
       }

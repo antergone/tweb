@@ -1,31 +1,26 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import indexOfAndSplice from '../../helpers/array/indexOfAndSplice';
-import callbackify from '../../helpers/callbackify';
-import ListenerSetter from '../../helpers/listenerSetter';
-import liteMode from '../../helpers/liteMode';
-import {getMiddleware} from '../../helpers/middleware';
-import {modifyAckedPromise} from '../../helpers/modifyAckedResult';
-import safeAssign from '../../helpers/object/safeAssign';
-import {Chat} from '../../layer';
-import {AppManagers} from '../../lib/appManagers/managers';
-import getPeerId from '../../lib/appManagers/utils/peers/getPeerId';
-import {i18n} from '../../lib/langPack';
-import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
-import {AckedResult} from '../../lib/mtproto/superMessagePort';
-import rootScope from '../../lib/rootScope';
-import {avatarNew} from '../avatarNew';
-import {ButtonMenuItemOptions, ButtonMenuSync} from '../buttonMenu';
-import ButtonMenuToggle from '../buttonMenuToggle';
-import Icon from '../icon';
-import PeerTitle from '../peerTitle';
-import PopupPremium from '../popups/premium';
-import SetTransition from '../singleTransition';
-import getChatMembersString from '../wrappers/getChatMembersString';
+import indexOfAndSplice from '@helpers/array/indexOfAndSplice';
+import callbackify from '@helpers/callbackify';
+import ListenerSetter from '@helpers/listenerSetter';
+import liteMode from '@helpers/liteMode';
+import {getMiddleware} from '@helpers/middleware';
+import {modifyAckedPromise} from '@helpers/modifyAckedResult';
+import namedPromises from '@helpers/namedPromises';
+import safeAssign from '@helpers/object/safeAssign';
+import {Chat} from '@layer';
+import {AppManagers} from '@lib/managers';
+import getPeerId from '@appManagers/utils/peers/getPeerId';
+import I18n, {i18n} from '@lib/langPack';
+import apiManagerProxy from '@lib/apiManagerProxy';
+import {AckedResult} from '@lib/superMessagePort';
+import rootScope from '@lib/rootScope';
+import {avatarNew} from '@components/avatarNew';
+import {ButtonMenuItemOptions, ButtonMenuSync} from '@components/buttonMenu';
+import ButtonMenuToggle from '@components/buttonMenuToggle';
+import Icon from '@components/icon';
+import PeerTitle from '@components/peerTitle';
+import showPremiumPopup from '@components/popups/premium';
+import SetTransition from '@components/singleTransition';
+import getChatMembersString from '@components/wrappers/getChatMembersString';
 
 const SEND_AS_ANIMATION_DURATION = 300;
 
@@ -69,9 +64,12 @@ export default class ChatSendAs {
   private construct() {
     this.container = document.createElement('div');
     this.container.classList.add('new-message-send-as-container');
+    this.container.setAttribute('role', 'button');
+    (this.menuContainer ?? this.container).setAttribute('aria-label', I18n.format(this.forPaidReaction ? 'SendReactionAsTitle' : 'SendMessageAsTitle', true));
 
     this.closeBtn = document.createElement('div');
     this.closeBtn.classList.add('new-message-send-as-close', 'new-message-send-as-avatar');
+    this.closeBtn.setAttribute('aria-hidden', 'true');
     this.closeBtn.append(Icon('close'));
 
     const sendAsButtons: ButtonMenuItemOptions[] = [{
@@ -123,7 +121,7 @@ export default class ChatSendAs {
       onOpen: (e, btnMenu) => {
         sendAsButtons[0].element.classList.add('btn-menu-item-header');
         this.btnMenu = btnMenu as any;
-        this.btnMenu.classList.add('scrollable', 'scrollable-y');
+        this.btnMenu.classList.add('scrollable', 'scrollable-y', 'new-message-send-as-menu');
         this.btnMenu.append(...this.buttons.map((button) => button.element));
       },
       onClose: () => {
@@ -168,7 +166,7 @@ export default class ChatSendAs {
       return {
         onClick: idx ? async() => {
           if(sendAsPeer.needPremium && !rootScope.premium) {
-            PopupPremium.show();
+            showPremiumPopup();
             return;
           }
 
@@ -239,7 +237,7 @@ export default class ChatSendAs {
     const duration = skipAnimation ? 0 : SEND_AS_ANIMATION_DURATION;
     const avatar = this.avatar = avatarNew({
       middleware: this.middlewareHelper.get(),
-      size: 30,
+      size: 40,
       isDialog: false,
       peerId: sendAsPeerId
     });
@@ -295,7 +293,13 @@ export default class ChatSendAs {
 
   public async updateManual(skipAnimation?: boolean): Promise<() => void> {
     const peerId = this.peerId;
-    if(this.updatingPromise || !(await this.managers.appPeersManager.isChannel(peerId))) {
+
+    const {isChannel, isMonoforum} = await namedPromises({
+      isChannel: this.managers.appPeersManager.isChannel(peerId),
+      isMonoforum: this.managers.appPeersManager.isMonoforum(peerId)
+    });
+
+    if(this.updatingPromise || !isChannel || isMonoforum) {
       return;
     }
 
@@ -337,7 +341,6 @@ export default class ChatSendAs {
             needPremium: sendAsPeer.pFlags.premium_required
           }
         });
-        this.sendAsPeers = peers.slice();
 
         const idx = peers.findIndex((peer) => peer.peerId === sendAsPeerId);
         if(idx !== -1) {
@@ -346,6 +349,11 @@ export default class ChatSendAs {
         } else {
           peers.unshift({peerId: sendAsPeerId});
         }
+
+        // * save AFTER folding in the current peer — for paid reactions the personal account
+        // * isn't part of the server list and is injected above; slicing earlier dropped it from
+        // * the canonical pool, so it vanished on the first re-render triggered by a selection.
+        this.sendAsPeers = peers.slice();
 
         this.updateButtons(peers);
       });

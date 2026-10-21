@@ -2,15 +2,15 @@ import {Component, ComponentProps, createComputed, createEffect, createSignal, S
 import {render} from 'solid-js/web';
 import {Transition} from 'solid-transition-group';
 
-import type SolidJSHotReloadGuardProvider from '../../../../lib/solidjs/hotReloadGuardProvider';
-import {i18n} from '../../../../lib/langPack';
+import type SolidJSHotReloadGuardProvider from '@lib/solidjs/hotReloadGuardProvider';
+import {i18n} from '@lib/langPack';
 
-import useStarsCommissionAndWithdrawalPrice from '../../../sidebarLeft/tabs/privacy/messages/useStarsCommissionAndWithdrawalPrice';
-import {PromiseCollector} from '../../../sidebarLeft/tabs/solidJsTabs/promiseCollector';
-import StarRangeInput from '../../../sidebarLeft/tabs/privacy/messages/starsRangeInput';
-import StaticSwitch from '../../../staticSwitch';
-import Section from '../../../section';
-import RowTsx from '../../../rowTsx';
+import useStarsCommissionAndWithdrawalPrice from '@components/sidebarLeft/tabs/privacy/messages/useStarsCommissionAndWithdrawalPrice';
+import {PromiseCollector} from '@components/solidJsTabs/promiseCollector';
+import StarRangeInput from '@components/sidebarLeft/tabs/privacy/messages/starsRangeInput';
+import CheckboxFieldTsx from '@components/checkboxFieldTsx';
+import Section from '@components/section';
+import Row from '@components/rowTsx';
 
 
 const TRANSITION_PARAMS: KeyframeAnimationOptions = {duration: 200, easing: 'ease-out'};
@@ -46,13 +46,12 @@ const ChargeForMessasgesSection: Component<{
   return (
     <>
       <Section caption='PaidMessages.ChargeForGroupMessagesDescription'>
-        <RowTsx
-          rightContent={
-            <StaticSwitch checked={checked()} />
-          }
-          clickable={() => {setChecked(p => !p)}}
-          title={i18n('PaidMessages.ChargeForMessages')}
-        />
+        <Row>
+          <Row.CheckboxFieldToggle>
+            <CheckboxFieldTsx toggle checked={checked()} onChange={setChecked} />
+          </Row.CheckboxFieldToggle>
+          <Row.Title>{i18n('PaidMessages.ChargeForMessages')}</Row.Title>
+        </Row>
       </Section>
       <Transition
         onEnter={async(el, done) => {
@@ -109,7 +108,7 @@ const createChargeForMessasgesSection = (
     element,
     dispose,
     promise: promiseCollectorHelper.await()
-  }
+  };
 };
 
 export default createChargeForMessasgesSection;

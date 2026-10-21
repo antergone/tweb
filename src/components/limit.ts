@@ -1,17 +1,11 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {animateSingle} from '../helpers/animation';
-import {easeInOutSineApply} from '../helpers/easing/easeInOutSine';
-import liteMode from '../helpers/liteMode';
-import clamp from '../helpers/number/clamp';
-import {doubleRaf} from '../helpers/schedulers';
-import {_i18n, i18n} from '../lib/langPack';
-import Icon from './icon';
-import RangeSelector from './rangeSelector';
+import {animateSingle} from '@helpers/animation';
+import {easeInOutSineApply} from '@helpers/easing/easeInOutSine';
+import liteMode from '@helpers/liteMode';
+import clamp from '@helpers/number/clamp';
+import {doubleRaf} from '@helpers/schedulers';
+import {_i18n, i18n} from '@lib/langPack';
+import Icon from '@components/icon';
+import RangeSelector from '@components/rangeSelector';
 
 type LimitLineProgressElements = {
   from1: HTMLElement,
@@ -160,7 +154,7 @@ export default class LimitLine {
       }
     };
 
-    if(lastProgress !== undefined && liteMode.isAvailable('animations')) {
+    if(lastProgress !== undefined && liteMode.isAvailable('motion')) {
       const duration = 200;
       const startTime = Date.now();
       const toAdd = progress - this.lastProgress;
@@ -187,7 +181,7 @@ export default class LimitLine {
   };
 
   public _setHintActive() {
-    if(liteMode.isAvailable('animations')) {
+    if(liteMode.isAvailable('motion')) {
       doubleRaf().then(this.setHintActive);
     } else {
       this.setHintActive();

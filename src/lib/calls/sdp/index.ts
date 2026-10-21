@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import SDPMediaSection from './mediaSection';
-import SDPSessionSection from './sessionSection';
+import SDPMediaSection from '@lib/calls/sdp/mediaSection';
+import SDPSessionSection from '@lib/calls/sdp/sessionSection';
 
 export type AttributeKey = 'group' | 'rtcp' | 'ice-ufrag' |
   'ice-pwd' | 'ice-options' | 'fingerprint' | 'setup' |

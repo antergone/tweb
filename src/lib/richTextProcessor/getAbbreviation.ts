@@ -1,12 +1,6 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MessageEntity} from '../../layer';
-import getEmojiEntityFromEmoji from './getEmojiEntityFromEmoji';
-import emojiRegExp from '../../vendor/emoji/regex';
+import {MessageEntity} from '@layer';
+import getEmojiEntityFromEmoji from '@lib/richTextProcessor/getEmojiEntityFromEmoji';
+import emojiRegExp from '@vendor/emoji/regex';
 
 const EMOJI_REG_EXP = new RegExp(`(^${emojiRegExp})`);
 

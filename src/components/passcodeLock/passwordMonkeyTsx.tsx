@@ -1,11 +1,11 @@
 import {Component, createRenderEffect, createSignal, mergeProps, onCleanup, Ref, Show} from 'solid-js';
 
-import {useLockScreenHotReloadGuard} from '../../lib/solidjs/hotReloadGuard';
+import {useLockScreenHotReloadGuard} from '@lib/solidjs/hotReloadGuard';
 
-import type PasswordInputField from '../passwordInputField';
-import type PasswordMonkey from '../monkeys/password';
+import type PasswordInputField from '@components/passwordInputField';
+import type PasswordMonkey from '@components/monkeys/password';
 
-import styles from './passwordMonkeyTsx.module.scss';
+import styles from '@components/passcodeLock/passwordMonkeyTsx.module.scss';
 
 
 const PasswordMonkeyTsx: Component<{
@@ -44,7 +44,7 @@ const PasswordMonkeyTsx: Component<{
 
       {/* Prevent the monkey blinking when reloading the page */}
       <Show when={!monkeyLoaded()}>
-        <img class={styles.MonkeyImage} src="assets/img/password-monkey-closed.png" />
+        <img class={styles.MonkeyImage} src="assets/img/password-monkey-closed.png" alt="" aria-hidden="true" />
       </Show>
     </div>
   );

@@ -1,4 +1,4 @@
-import {IS_MOV_SUPPORTED} from './videoSupport';
+import {IS_MOV_SUPPORTED} from '@environment/videoSupport';
 
 export type VIDEO_MIME_TYPE = 'image/gif' | 'video/mp4' | 'video/webm' | 'video/quicktime';
 const VIDEO_MIME_TYPES_SUPPORTED: Set<VIDEO_MIME_TYPE> = new Set([
@@ -9,6 +9,11 @@ const VIDEO_MIME_TYPES_SUPPORTED: Set<VIDEO_MIME_TYPE> = new Set([
 
 if(IS_MOV_SUPPORTED) {
   VIDEO_MIME_TYPES_SUPPORTED.add('video/quicktime');
+}
+
+/** The set is keyed by the literal union, so the narrowing cast lives here once. */
+export function isVideoMimeType(mimeType: string): mimeType is VIDEO_MIME_TYPE {
+  return VIDEO_MIME_TYPES_SUPPORTED.has(mimeType as VIDEO_MIME_TYPE);
 }
 
 export default VIDEO_MIME_TYPES_SUPPORTED;

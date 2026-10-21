@@ -1,8 +1,4 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+@use "../shared" as *;
 
 .custom-emoji {
   display: inline;
@@ -22,8 +18,16 @@
     min-height: inherit;
   }
 
+  // * mostly for instant view's `textImage` entities
+  &-custom-sized {
+    width: var(--width) !important;
+    height: var(--height) !important;
+    display: inline-block;
+    vertical-align: middle;
+  }
+
   .media-sticker,
-  .rlottie {
+  .lottie {
     margin: 0;
     width: inherit !important;
     height: inherit !important;
@@ -41,6 +45,11 @@
     right: 0;
     bottom: 0;
     left: 0;
+
+    // CustomEmojiRendererElement.showsCommittedSize
+    &-committed-size {
+      @include offscreen-canvas-committed-size;
+    }
   }
 
   &-renderer {
@@ -51,6 +60,13 @@
     right: 0;
     bottom: 0;
     left: 0;
+
+    // a canvas shown at its committed size is larger than a box that just shrank, for a frame:
+    // nothing is drawn past the box, and the scroll it sits in does not grow for that frame. Only
+    // there: a canvas sized by hand may be meant to be wider than its box (the emoji helper's strip)
+    &-committed-size {
+      overflow: hidden;
+    }
   }
 
   &-placeholder {

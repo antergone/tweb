@@ -1,19 +1,12 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import type {Chat} from '../../../../layer';
-import type {Dialog} from '../../appMessagesManager';
-import type {User} from '../../appUsersManager';
-import type {StoragesStorages} from './createStorages';
-import type {ResetStoragesPromise} from '../../appStateManager';
-import type AppStorage from '../../../storage';
-import {recordPromiseBound} from '../../../../helpers/recordPromise';
-import {Awaited} from '../../../../types';
-import {logger} from '../../../logger';
-import noop from '../../../../helpers/noop';
+import type {Chat} from '@layer';
+import type {Dialog} from '@appManagers/appMessagesManager';
+import type {User} from '@appManagers/appUsersManager';
+import type {StoragesStorages} from '@appManagers/utils/storages/createStorages';
+import type {ResetStoragesPromise} from '@appManagers/appStateManager';
+import type AppStorage from '@lib/storage';
+import {recordPromiseBound} from '@helpers/recordPromise';
+import {logger} from '@lib/logger';
+import noop from '@helpers/noop';
 
 export type StoragesResults = Awaited<ReturnType<typeof loadStorages>>;
 

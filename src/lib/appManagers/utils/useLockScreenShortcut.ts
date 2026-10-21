@@ -1,13 +1,13 @@
+import PasscodeLockScreenController from '@components/passcodeLock/passcodeLockScreenController';
+import ListenerSetter from '@helpers/listenerSetter';
+import {joinDeepPath} from '@helpers/object/setDeepProperty';
+import {addShortcutListener} from '@helpers/shortcutListener';
+import {getAppWindow} from '@helpers/appWindow';
+import apiManagerProxy from '@lib/apiManagerProxy';
+import appImManager from '@lib/appImManager';
+import rootScope from '@lib/rootScope';
 import {createEffect, createResource, createRoot, createSignal, onCleanup} from 'solid-js';
 
-import PasscodeLockScreenController from '../../../components/passcodeLock/passcodeLockScreenController';
-import {addShortcutListener} from '../../../helpers/shortcutListener';
-import {joinDeepPath} from '../../../helpers/object/setDeepProperty';
-import ListenerSetter from '../../../helpers/listenerSetter';
-
-import rootScope from '../../rootScope';
-
-import appImManager from '../appImManager';
 
 const _useLockScreenShortcut = () => {
   const [locked, setLocked] = createSignal(PasscodeLockScreenController.getIsLocked());
@@ -42,10 +42,6 @@ const _useLockScreenShortcut = () => {
     }
   });
 
-  listenerSetter.add(rootScope)('toggle_locked', (value) => {
-    setLocked(value);
-  });
-
   onCleanup(() => {
     listenerSetter.removeAll();
   });
@@ -61,7 +57,7 @@ const _useLockScreenShortcut = () => {
     appImManager.isShiftLockShortcut = isShiftLockShortcut;
 
     const removeListener = addShortcutListener([combo], (_, event) => {
-      const activeElement = document.activeElement as HTMLElement;
+      const activeElement = getAppWindow().document.activeElement as HTMLElement;
 
       if(
         isShiftLockShortcut &&
@@ -72,7 +68,7 @@ const _useLockScreenShortcut = () => {
       event.preventDefault();
 
       PasscodeLockScreenController.lock(true, () => {
-        rootScope.dispatchEvent('toggle_locked', true);
+        apiManagerProxy.lock();
       });
       // PasscodeLockScreenController.lockOtherTabs();
     }, false);

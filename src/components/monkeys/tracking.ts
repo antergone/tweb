@@ -1,12 +1,24 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+import InputField from '@components/inputField';
+import lottieLoader from '@lib/lottie/lottieLoader';
+import LottiePlayer from '@lib/lottie/lottiePlayer';
+import CodeInputFieldCompat from '@components/codeInputField';
+import {fastRaf} from '@helpers/schedulers';
 
-import InputField from '../inputField';
-import lottieLoader from '../../lib/rlottie/lottieLoader';
-import RLottiePlayer from '../../lib/rlottie/rlottiePlayer';
+const IDLE_ASSET = 'TwoFactorSetupMonkeyIdle';
+const TRACKING_ASSET = 'TwoFactorSetupMonkeyTracking';
+
+/**
+ * Fetches what the monkey is drawn from, and warms the lottie workers with it. Its two assets are
+ * loaded when the card that shows it mounts, which is after that card has entered - started early
+ * enough (the code is on its way), the sticker is there when the card opens instead of a moment,
+ * or a slow fetch, later. `loadAssetData` keeps one promise per asset, so the load below reuses it.
+ */
+export function preloadTrackingMonkey() {
+  return Promise.all([
+    lottieLoader.loadAnimationFromURLManually(IDLE_ASSET),
+    lottieLoader.loadAnimationFromURLManually(TRACKING_ASSET)
+  ]);
+}
 
 export default class TrackingMonkey {
   public container: HTMLElement;
@@ -14,12 +26,12 @@ export default class TrackingMonkey {
   protected max = 45;
   protected needFrame = 0;
 
-  protected animation: RLottiePlayer;
-  protected idleAnimation: RLottiePlayer;
+  protected animation: LottiePlayer;
+  protected idleAnimation: LottiePlayer;
 
   protected loadPromise: Promise<any>;
 
-  constructor(protected inputField: InputField, protected size: number) {
+  constructor(protected inputField: InputField | CodeInputFieldCompat, protected size: number) {
     this.container = document.createElement('div');
     this.container.classList.add('media-sticker-wrapper');
 
@@ -29,9 +41,24 @@ export default class TrackingMonkey {
       this.playAnimation(0);
     });
 
-    input.addEventListener('input', (e) => {
-      this.playAnimation(inputField.value.length);
-    });
+    const isCodeInputField = inputField instanceof CodeInputFieldCompat;
+
+    if(isCodeInputField) {
+      input.addEventListener('focus', () => {
+        this.playAnimation(1);
+      });
+
+      input.addEventListener('input', (e) => {
+        fastRaf(() => {
+          const frac = (1 + inputField.value.length) / inputField.options.length;
+          this.playAnimation(frac * this.max);
+        })
+      });
+    } else {
+      input.addEventListener('input', (e) => {
+        this.playAnimation(inputField.value.length);
+      });
+    }
 
     /* codeInput.addEventListener('focus', () => {
       playAnimation(Math.max(codeInput.value.length, 1));
@@ -95,7 +122,7 @@ export default class TrackingMonkey {
         autoplay: true,
         width: this.size,
         height: this.size
-      }, 'TwoFactorSetupMonkeyIdle').then((animation) => {
+      }, IDLE_ASSET).then((animation) => {
         this.idleAnimation = animation;
 
         // ! animationIntersector will stop animation instantly
@@ -112,7 +139,7 @@ export default class TrackingMonkey {
         autoplay: false,
         width: this.size,
         height: this.size
-      }, 'TwoFactorSetupMonkeyTracking').then((_animation) => {
+      }, TRACKING_ASSET).then((_animation) => {
         this.animation = _animation;
 
         if(!this.inputField.value.length) {

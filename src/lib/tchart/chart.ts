@@ -1,18 +1,19 @@
-import TAnimator from './animator';
-import TAreas from './areas';
-import TAxisX from './axisX';
-import TAxisY from './axisY';
-import TBars from './bars';
-import TComposer from './composer';
-import TFade from './fade';
-import THandle from './handle';
-import TLines from './lines';
-import TSwitchers from './switchers';
-import TTip from './tip';
-import {getFormatter, getXIndex, roundRange, triggerEvent} from './utils';
-import {TChartAnimationProperty, TChartConstructorOptions, TChartData, TChartDataDetails, TChartRange, TChartRangePaired, TChartRangeSingle, TChartSettings, TChartState, TChartStateZoom, TChartType, TChartTypeRenderer, TChartUnitOptions} from './types';
-import {getLabelDate, getLabelTime} from './format';
-import './chart.scss';
+import TAnimator from '@lib/tchart/animator';
+import TAreas from '@lib/tchart/areas';
+import TAxisX from '@lib/tchart/axisX';
+import TAxisY from '@lib/tchart/axisY';
+import TBars from '@lib/tchart/bars';
+import TComposer from '@lib/tchart/composer';
+import TFade from '@lib/tchart/fade';
+import THandle from '@lib/tchart/handle';
+import TLines from '@lib/tchart/lines';
+import TSwitchers from '@lib/tchart/switchers';
+import TTip from '@lib/tchart/tip';
+import {getFormatter, getXIndex, roundRange, triggerEvent} from '@lib/tchart/utils';
+import {TChartAnimationProperty, TChartConstructorOptions, TChartData, TChartDataDetails, TChartRange, TChartRangePaired, TChartRangeSingle, TChartSettings, TChartState, TChartStateZoom, TChartType, TChartTypeRenderer, TChartUnitOptions} from '@lib/tchart/types';
+import {getLabelDate, getLabelTime} from '@lib/tchart/format';
+import I18n from '@lib/langPack';
+import '@lib/tchart/chart.scss';
 
 export default class TChart {
   private opts: TChartConstructorOptions;
@@ -663,6 +664,10 @@ export default class TChart {
     const rectGraph = this.$graph.getBoundingClientRect();
     const s = this.settings;
     const graphHeight = rectGraph.height - s.DATES_HEIGHT - s.MINI_GRAPH_HEIGHT - s.MINI_GRAPH_TOP - s.MINI_GRAPH_BOTTOM;
+    // * the time axis runs left to right in any language, the range of dates above it is page text and turns with it
+    const datesSide = this.state.datesSide = I18n.getIsRTL() ?
+      (s.DATES_SIDE === 'right' ? 'left' : 'right') :
+      s.DATES_SIDE;
 
     this.state.dims = {
       composer: {
@@ -716,7 +721,7 @@ export default class TChart {
       dates: {
         w: s.DATES_WIDTH,
         h: s.DATES_HEIGHT,
-        l: this.opts.settings.DATES_SIDE === 'right' ? rectGraph.width - s.DATES_WIDTH - s.PADD[1] : s.PADD[1],
+        l: datesSide === 'right' ? rectGraph.width - s.DATES_WIDTH - s.PADD[1] : s.PADD[1],
         t: 0
       },
       mini: {

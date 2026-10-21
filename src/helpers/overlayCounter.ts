@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MOUNT_CLASS_TO} from '../config/debug';
-import EventListenerBase from './eventListenerBase';
+import {MOUNT_CLASS_TO} from '@config/debug';
+import EventListenerBase from '@helpers/eventListenerBase';
 
 export class OverlayCounter extends EventListenerBase<{
   change: (isActive: boolean) => void

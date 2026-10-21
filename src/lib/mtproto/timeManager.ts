@@ -1,19 +1,13 @@
 /*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- *
  * Originally from:
  * https://github.com/zhukov/webogram
  * Copyright (C) 2014 Igor Zhukov <igor.beatle@gmail.com>
  * https://github.com/zhukov/webogram/blob/master/LICENSE
  */
 
-import sessionStorage from '../sessionStorage';
-import {nextRandomUint} from '../../helpers/random';
-import {WorkerTaskVoidTemplate} from '../../types';
-import ulongFromInts from '../../helpers/long/ulongFromInts';
-import {AppManager} from '../appManagers/manager';
+import {nextRandomUint} from '@helpers/random';
+import ulongFromInts from '@helpers/long/ulongFromInts';
+import tsNow from '@helpers/tsNow';
 
 /*
 let lol: any = {};
@@ -22,14 +16,10 @@ for(var i = 0; i < 100; i++) {
 }
 */
 
-export interface ApplyServerTimeOffsetTask extends WorkerTaskVoidTemplate {
-  type: 'applyServerTimeOffset',
-  payload: TimeManager['timeOffset']
-};
-
-export class TimeManager extends AppManager {
+export class TimeManager {
   private lastMessageId: [number, number];
-  private timeOffset: number;
+  public timeOffset: number;
+  public onTimeOffsetChange: (timeOffset: number) => void;
 
   /* private midnightNoOffset: number;
   private midnightOffseted: Date;
@@ -41,16 +31,9 @@ export class TimeManager extends AppManager {
     serverTimeOffset: number
   }; */
 
-  protected after() {
+  constructor() {
     this.lastMessageId = [0, 0];
     this.timeOffset = 0;
-
-    sessionStorage.get('server_time_offset').then((to) => {
-      if(to) {
-        this.timeOffset = to;
-      }
-    });
-
 
     // * migrated from ServerTimeManager
     /* const timestampNow = tsNow(true);
@@ -68,6 +51,13 @@ export class TimeManager extends AppManager {
 
   public getServerTimeOffset() {
     return this.timeOffset;
+  }
+
+  /**
+   * Now by the server's clock, in seconds
+   */
+  public getServerTime() {
+    return tsNow(true) + this.timeOffset;
   }
 
   public generateId(): string {
@@ -103,10 +93,6 @@ export class TimeManager extends AppManager {
     this.lastMessageId = [0, 0];
 
     if(this.timeOffset !== newTimeOffset) {
-      sessionStorage.set({
-        server_time_offset: newTimeOffset
-      });
-
       this.timeOffset = newTimeOffset;
     }
 

@@ -1,8 +1,4 @@
 /*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- *
  * Originally from:
  * https://github.com/zhukov/webogram
  * Copyright (C) 2014 Igor Zhukov <igor.beatle@gmail.com>
@@ -10,10 +6,10 @@
  */
 
 import {EMAIL_REG_EXP, FULL_REG_EXP} from '.';
-import TLD from '../../config/tld';
-import {MessageEntity} from '../../layer';
-import checkBrackets from './checkBrackets';
-import getEmojiUnified from './getEmojiUnified';
+import TLD from '@config/tld';
+import {MessageEntity} from '@layer';
+import checkBrackets from '@lib/richTextProcessor/checkBrackets';
+import getEmojiUnified from '@lib/richTextProcessor/getEmojiUnified';
 
 export default function parseEntities(text: string) {
   let match: RegExpMatchArray;
@@ -88,12 +84,17 @@ export default function parseEntities(text: string) {
           unicode: unified
         });
       }
-    } else if(match[11]) { // Hashtag
-      entities.push({
-        _: 'messageEntityHashtag',
-        offset: matchIndex + (match[10] ? match[10].length : 0),
-        length: match[11].length
-      });
+    } else if(match[11]) { // Hashtag or cashtag
+      const isCashtag = match[11][0] === '$';
+      const cashtag = isCashtag ? match[11].split('@', 1)[0] : undefined;
+
+      if(!cashtag || cashtag === cashtag.toUpperCase()) {
+        entities.push({
+          _: isCashtag ? 'messageEntityCashtag' : 'messageEntityHashtag',
+          offset: matchIndex + (match[10] ? match[10].length : 0),
+          length: match[11].length
+        });
+      }
     } else if(match[13]) { // Bot command
       entities.push({
         _: 'messageEntityBotCommand',

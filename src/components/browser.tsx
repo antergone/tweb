@@ -1,60 +1,72 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
 import {Portal} from 'solid-js/web';
-import {batch, createContext, createEffect, createRoot, For, onCleanup, onMount, useContext, JSX, createMemo, createSignal, Accessor, untrack, createResource, Resource, on, createReaction} from 'solid-js';
-import styles from './browser.module.scss';
-import {ButtonIconTsx} from './buttonIconTsx';
-import getTextWidth from '../helpers/canvas/getTextWidth';
-import {FontFull} from '../config/font';
+import {batch, createContext, createEffect, createRoot, For, onCleanup, onMount, useContext, JSX, createMemo, createSignal, Accessor, untrack, createResource, Resource, on, createReaction, Show, createRenderEffect, createComputed, Setter} from 'solid-js';
+import styles from '@components/browser.module.scss';
+import {ButtonIconTsx} from '@components/buttonIconTsx';
+import getTextWidth from '@helpers/canvas/getTextWidth';
+import {FontFull, FontFullBold} from '@config/font';
 import {createStore, reconcile, unwrap} from 'solid-js/store';
-import untrackActions from '../helpers/solid/untrackActions';
-import classNames from '../helpers/string/classNames';
-import Scrollable from './scrollable2';
-import fastSmoothScroll from '../helpers/fastSmoothScroll';
-import {IconTsx} from './iconTsx';
-import {ButtonMenuItemOptionsVerifiable, ButtonMenuSync} from './buttonMenu';
-import {attachContextMenuListener} from '../helpers/dom/attachContextMenuListener';
-import ListenerSetter from '../helpers/listenerSetter';
-import findUpClassName from '../helpers/dom/findUpClassName';
-import contextMenuController from '../helpers/contextMenuController';
-import positionMenu from '../helpers/positionMenu';
-import copy from '../helpers/object/copy';
-import {filterButtonMenuItems} from './buttonMenuToggle';
-import Animated from '../helpers/solid/animations';
-import WebApp, {WebAppLaunchOptions} from './webApp';
-import deferredPromise from '../helpers/cancellablePromise';
-import documentFragmentToNodes from '../helpers/dom/documentFragmentToNodes';
-import wrapEmojiText from '../lib/richTextProcessor/wrapEmojiText';
-import {i18n} from '../lib/langPack';
-import {avatarNew} from './avatarNew';
-import {getMiddleware} from '../helpers/middleware';
-import MovablePanel from '../helpers/movablePanel';
-import {MovableState} from './movableElement';
+import untrackActions from '@helpers/solid/untrackActions';
+import classNames from '@helpers/string/classNames';
+import Scrollable from '@components/scrollable2';
+import fastSmoothScroll from '@helpers/fastSmoothScroll';
+import {IconTsx} from '@components/iconTsx';
+import {ButtonMenuItemOptionsVerifiable, ButtonMenuSync} from '@components/buttonMenu';
+import {attachContextMenuListener} from '@helpers/dom/attachContextMenuListener';
+import ListenerSetter from '@helpers/listenerSetter';
+import findUpClassName from '@helpers/dom/findUpClassName';
+import contextMenuController from '@helpers/contextMenuController';
+import positionMenu from '@helpers/positionMenu';
+import copy from '@helpers/object/copy';
+import {filterButtonMenuItems} from '@components/buttonMenuToggle';
+import Animated from '@helpers/solid/animations';
+import WebApp, {WebAppLaunchOptions} from '@components/webApp';
+import deferredPromise from '@helpers/cancellablePromise';
+import documentFragmentToNodes from '@helpers/dom/documentFragmentToNodes';
+import wrapEmojiText from '@lib/richTextProcessor/wrapEmojiText';
+import I18n, {i18n} from '@lib/langPack';
+import {avatarNew} from '@components/avatarNew';
+import {getMiddleware} from '@helpers/middleware';
+import MovablePanel from '@helpers/movablePanel';
+import {MovableState} from '@components/movableElement';
 import {Ref, resolveElements, resolveFirst} from '@solid-primitives/refs';
-import Section from './section';
-import InputSearch from './inputSearch';
-import rootScope from '../lib/rootScope';
-import {SimilarPeer} from './chat/similarChannels';
-import SearchIndex from '../lib/searchIndex';
-import {useUser} from '../stores/peers';
-import {User} from '../layer';
-import getPeerActiveUsernames from '../lib/appManagers/utils/peers/getPeerActiveUsernames';
-import internalLinkProcessor from '../lib/appManagers/internalLinkProcessor';
-import {INTERNAL_LINK_TYPE} from '../lib/appManagers/internalLink';
+import Section from '@components/section';
+import InputSearch from '@components/inputSearch';
+import rootScope from '@lib/rootScope';
+import {SimilarPeer} from '@components/chat/similarChannels';
+import SearchIndex from '@lib/searchIndex';
+import {useUser} from '@stores/peers';
+import {Game, Message, Page, User} from '@layer';
+import TelegramWebView from '@components/telegramWebView';
+import showForwardPopup from '@components/popups/forward';
+import {getOverlayRoot} from '@helpers/appWindow';
+import getPeerActiveUsernames from '@appManagers/utils/peers/getPeerActiveUsernames';
+import internalLinkProcessor from '@lib/internalLinkProcessor';
+import {INTERNAL_LINK_TYPE} from '@lib/internalLink';
+import {InstantView} from '@components/instantView';
+import {WebPage} from '@layer';
+import SolidJSHotReloadGuardProvider from '@lib/solidjs/hotReloadGuardProvider';
+import {copyTextToClipboard} from '@helpers/clipboard';
+import safeWindowOpen from '@helpers/dom/safeWindowOpen';
+import wrapTelegramRichText from '@lib/richTextProcessor/wrapTelegramRichText';
+import limitSymbols from '@helpers/string/limitSymbols';
+import {toastNew} from '@components/toast';
+import pause from '@helpers/schedulers/pause';
+import assumeType from '@helpers/assumeType';
+import {useAppSettings} from '@stores/appSettings';
+import cancelEvent from '@helpers/dom/cancelEvent';
+import clamp from '@helpers/number/clamp';
+import windowSize from '@helpers/windowSize';
+import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
 
-type BrowserPageProps = {
+type BrowserPageProps<T = {}> = T & {
   title: string, // plain text
   icon: JSX.Element,
   dispose: () => void,
-  titleWidth?: number,
+  titleWidth?: () => number,
   id?: string,
   menuButtons?: ButtonMenuItemOptionsVerifiable[],
-  scrollFromPage?: BrowserPageProps,
-  content?: JSX.Element,
+  scrollFromPage?: BrowserPageProps<any>,
+  content?: JSX.Element | (() => JSX.Element),
   cacheKey?: string,
 
   isCatalogue?: boolean,
@@ -97,7 +109,7 @@ function BrowserHeaderTab(props: {
       value += (index - 2) * -40;
     }
 
-    return `translateX(${value}px)`;
+    return `translateX(calc(${value}px * var(--reflect)))`;
   });
 
   return (
@@ -109,13 +121,13 @@ function BrowserHeaderTab(props: {
         state.pages.indexOf(props.page) === 0 && styles.first
       )}
       style={{
-        '--text-width': props.page.titleWidth + 26 + 'px',
+        '--text-width': props.page.titleWidth() + 26 + 'px',
         'z-index': Math.max(1, 4 - props.index()),
         'transform': transform()
       }}
       onClick={() => actions.select(props.page)}
     >
-      <BrowserHeaderButton class={styles.BrowserHeaderTabIcon}>
+      <BrowserHeaderButton class={styles.BrowserHeaderTabIcon} aria-label={props.page.title}>
         <span class={styles.BrowserHeaderTabIconInner}>{props.page.icon}</span>
         <IconTsx
           icon="more"
@@ -123,7 +135,7 @@ function BrowserHeaderTab(props: {
           onClick={props.openPageMenu}
         />
       </BrowserHeaderButton>
-      <div class={styles.BrowserHeaderTabTitle}>
+      <div dir="auto" class={styles.BrowserHeaderTabTitle}>
         {documentFragmentToNodes(wrapEmojiText(props.page.title))}
       </div>
       <div class={classNames(styles.BrowserHeaderTabHover, styles.BrowserHeaderTabMask)}></div>
@@ -160,7 +172,7 @@ function BrowserHeader(props: {
       axis: 'x',
       forceDuration: 200,
       getNormalSize: ({rect}) => {
-        const diff = scrollFromPage.titleWidth - page.titleWidth;
+        const diff = scrollFromPage.titleWidth() - page.titleWidth();
         return rect.width + diff/*  + page.titleWidth */;
       }
     });
@@ -172,9 +184,9 @@ function BrowserHeader(props: {
       return;
     }
 
-    if(e instanceof MouseEvent) e.preventDefault();
+    if(!('touches' in e)) e.preventDefault(); // cross-realm-safe mouse check (Document PiP window)
     // smth
-    if(e instanceof MouseEvent) e.cancelBubble = true;
+    if(!('touches' in e)) e.cancelBubble = true;
 
     const page = state.pages.find((page) => tabMap.get(page.id) === target);
     if(!page?.menuButtons) {
@@ -182,7 +194,8 @@ function BrowserHeader(props: {
     }
 
     const listenerSetter = new ListenerSetter();
-    const buttons = (await filterButtonMenuItems(copy(page.menuButtons))).map((button) => {
+    const copied = page.menuButtons.map((button) => (button = unwrap(button), button.element ? button : copy(button)));
+    const buttons = (await filterButtonMenuItems(copied)).map((button) => {
       button.options = {listenerSetter};
       return button;
     });
@@ -192,7 +205,7 @@ function BrowserHeader(props: {
     });
     element.classList.add('contextmenu');
 
-    document.getElementById('page-chats').append(element);
+    getOverlayRoot().append(element);
 
     positionMenu(e, element);
     contextMenuController.openBtnMenu(element, () => {
@@ -224,7 +237,7 @@ function BrowserHeader(props: {
     } else if(pages.length === 2) {
       return i18n('MiniApps.Collapsed.Two', wrapTitles(pages.slice(0, 2)));
     } else {
-      return i18n('MiniApps.Collapsed.Many', [...wrapTitles([pages[0]]), pages.length - 1]);
+      return i18n('MiniApps.Collapsed.Many', [pages.length - 1, ...wrapTitles([pages[0]])]);
     }
   });
 
@@ -232,6 +245,7 @@ function BrowserHeader(props: {
   return (
     <div class={styles.BrowserHeader}>
       <BrowserHeaderButton
+        aria-label={I18n.format(needBackButton() ? 'AccDescr.Back' : 'Close', true)}
         onClick={() => {
           if(needBackButton()) {
             state.page.onBackClick();
@@ -252,8 +266,8 @@ function BrowserHeader(props: {
           <div
             class={styles.BrowserHeaderSelector}
             style={{
-              transform: `translateX(${state.index * 40 + 7 + (state.index >= 1 ? 16 : 0)}px)`,
-              width: state.page.titleWidth + 16 * 2 + 34 + 'px'
+              transform: `translateX(calc(${state.index * 40 + 7 + (state.index >= 1 ? 16 : 0)}px * var(--reflect)))`,
+              width: state.page.titleWidth() + 16 * 2 + 34 + 'px'
             }}
           >
             <BrowserHeaderTipSvg left />
@@ -274,6 +288,7 @@ function BrowserHeader(props: {
           </Animated>
           <BrowserHeaderButton
             class={classNames(styles.BrowserHeaderTabIcon, styles.BrowserHeaderNewButton)}
+            aria-label={I18n.format('MiniApps.OpenApp', true)}
             onClick={() => openCatalogueInAppBrowser()}
           >
             <span class={styles.BrowserHeaderTabIconInner}><IconTsx icon="plus" /></span>
@@ -286,10 +301,13 @@ function BrowserHeader(props: {
       >
         {collapsedTitle()}
       </div>
-      <BrowserHeaderButton
-        icon={state.collapsed ? 'app_expand' : 'app_shrink'}
-        onClick={() => actions.toggleCollapsed()}
-      />
+      <Show when={state.canCollapse}>
+        <BrowserHeaderButton
+          icon={state.collapsed ? 'app_expand' : 'app_shrink'}
+          aria-label={I18n.format(state.collapsed ? 'InAppBrowser.Restore' : 'InAppBrowser.Minimize', true)}
+          onClick={() => actions.toggleCollapsed()}
+        />
+      </Show>
     </div>
   );
 }
@@ -299,15 +317,17 @@ type BrowserContextState = {
   index: number,
   page: BrowserPageProps,
   destroyed: boolean,
-  collapsed: boolean
+  collapsed: boolean,
+  canCollapse: boolean
 };
 type BrowserContextActions = {
   add: (page: BrowserPageProps) => void,
   select: (page: BrowserPageProps | number) => void,
   close: (page: BrowserPageProps) => void,
   destroy: () => void,
-  toggleCollapsed: () => void,
-  replace: (page: BrowserPageProps, originalPage: BrowserPageProps) => void
+  toggleCollapsed: (collapse?: boolean) => void,
+  replace: (page: BrowserPageProps, originalPage: BrowserPageProps) => void,
+  setCanCollapse: (canCollapse: boolean) => void
 };
 
 export type BrowserContextValue = [
@@ -325,7 +345,8 @@ function createBrowserStore(props: {
       return state.pages[state.index];
     },
     destroyed: false,
-    collapsed: false
+    collapsed: false,
+    canCollapse: true
   };
 
   const [state, setState] = createStore<BrowserContextState>(initialState);
@@ -403,14 +424,24 @@ function createBrowserStore(props: {
 
       setState('destroyed', true);
     },
-    toggleCollapsed: () => {
-      setState('collapsed', (v) => !v);
+    toggleCollapsed: (collapse) => {
+      if(!untrack(() => state.canCollapse)) {
+        collapse = false;
+      }
+
+      setState('collapsed', collapse ?? ((v) => !v));
     },
     replace: (page, originalPage) => {
       page.id = originalPage.id;
       page = makeBrowserPage(page);
       originalPage.dispose();
       setState('pages', state.pages.findIndex((_page) => _page.id === originalPage.id), reconcile(page));
+    },
+    setCanCollapse: (canCollapse) => {
+      setState({
+        canCollapse,
+        ...(!canCollapse && {collapsed: false})
+      });
     }
   });
 
@@ -461,7 +492,7 @@ function Browser(props: {
 
           return true;
         },
-        aspectRatio,
+        aspectRatio: IS_TOUCH_SUPPORTED ? aspectRatio : undefined,
         resetTransition: true
       },
       onResize: (movableState) => {
@@ -476,6 +507,26 @@ function Browser(props: {
 
     createEffect(() => {
       const {movable} = movablePanel;
+      if(!movable) {
+        createEffect(() => {
+          setMovableState({
+            width: windowSize.width - 16,
+            height: Math.min(688, windowSize.height - 16 * 2)
+          });
+
+          ref.style.width = movableState().width + 'px';
+          ref.style.height = movableState().height + 'px';
+        });
+
+        actions.setCanCollapse(false);
+        ref.classList.add(styles.noMovable);
+        onCleanup(() => {
+          actions.setCanCollapse(true);
+          ref.classList.remove(styles.noMovable);
+        });
+        return;
+      }
+
       const {collapsed} = state;
       const collapsedWidth = 328;
       const collapsedHeight = 48;
@@ -523,7 +574,7 @@ function Browser(props: {
                 state.page !== page && 'hide'
               )}
             >
-              {page.content}
+              {typeof(page.content) === 'function' ? page.content() : page.content}
             </div>
           );
         }}</For>
@@ -552,7 +603,7 @@ function Browser(props: {
 }
 
 function makeBrowserPage(props: BrowserPageProps): BrowserPageProps {
-  props.titleWidth ??= getTextWidth(props.title, FontFull);
+  props.titleWidth ??= () => getTextWidth(props.title, FontFullBold);
   props.id ??= Math.random().toString(36).slice(2);
   props.menuButtons ??= [];
   props.menuButtons.push({
@@ -569,6 +620,7 @@ let lastContext: BrowserContextValue;
 export function openInAppBrowser(page?: BrowserPageProps) {
   if(lastContext) {
     lastContext[1].add(page);
+    lastContext[1].toggleCollapsed(false);
     return;
   }
 
@@ -590,6 +642,11 @@ export function openInAppBrowser(page?: BrowserPageProps) {
       </BrowserContext.Provider>
     );
   });
+}
+
+/** Takes the in-app browser down with every page in it, the way its own close button does. */
+export function closeInAppBrowser() {
+  lastContext?.[1].destroy();
 }
 
 export async function openWebAppInAppBrowser(options: WebAppLaunchOptions) {
@@ -614,6 +671,12 @@ export async function openWebAppInAppBrowser(options: WebAppLaunchOptions) {
   });
 
   const title = await webApp.getTitle(true);
+  if(destroy()) {
+    webApp.destroy();
+    options.onClose?.();
+    return;
+  }
+
   webApp.init(() => deferred);
 
   const middlewareHelper = getMiddleware();
@@ -623,6 +686,12 @@ export async function openWebAppInAppBrowser(options: WebAppLaunchOptions) {
     middleware: middlewareHelper.get()
   });
   await avatar.readyThumbPromise;
+  if(destroy()) {
+    middlewareHelper.destroy();
+    webApp.destroy();
+    options.onClose?.();
+    return;
+  }
 
   return createRoot((dispose) => {
     const initialState: BrowserPageProps = {
@@ -639,7 +708,10 @@ export async function openWebAppInAppBrowser(options: WebAppLaunchOptions) {
       cacheKey: webApp.cacheKey
     };
 
-    onCleanup(() => webApp.destroy());
+    onCleanup(() => {
+      webApp.destroy();
+      options.onClose?.();
+    });
 
     createEffect(() => {
       if(destroy()) {
@@ -659,6 +731,101 @@ export async function openWebAppInAppBrowser(options: WebAppLaunchOptions) {
     createEffect(on(() => lastContext[0].collapsed, (collapsed) => {
       webApp.notifyVisible(!collapsed);
     }))
+  });
+}
+
+const GAME_SANDBOX_ATTRIBUTES = [
+  'allow-scripts',
+  'allow-same-origin',
+  'allow-popups',
+  'allow-popups-to-escape-sandbox',
+  'allow-forms',
+  'allow-modals',
+  'allow-orientation-lock',
+  'allow-pointer-lock'
+].join(' ');
+
+const GAME_ALLOW_ATTRIBUTES = 'accelerometer; gyroscope; magnetometer; gamepad; fullscreen; autoplay; clipboard-write;';
+
+export async function openGameInAppBrowser(options: {
+  game: Game.game,
+  message: Message.message,
+  url: string
+}) {
+  const {game, message, url} = options;
+  const cacheKey = `game-${game.id}-${message.peerId}-${message.mid}`;
+
+  if(lastContext) {
+    const existing = lastContext[0].pages.find((page) => page.cacheKey === cacheKey);
+    if(existing) {
+      lastContext[1].select(existing);
+      lastContext[1].toggleCollapsed(false);
+      return;
+    }
+  }
+
+  const shareMessage = async() => {
+    const mids = await rootScope.managers.appMessagesManager.getMidsByMessage(message);
+    showForwardPopup({[message.peerId]: mids});
+  };
+
+  const body = document.createElement('div');
+  body.classList.add(styles.BrowserGameBody);
+
+  const telegramWebView = new TelegramWebView({
+    url,
+    sandbox: GAME_SANDBOX_ATTRIBUTES,
+    allow: GAME_ALLOW_ATTRIBUTES,
+    onLoad: () => {
+      telegramWebView.iframe.style.opacity = '1';
+    }
+  });
+
+  const iframe = telegramWebView.iframe;
+  iframe.classList.add(styles.BrowserGameIframe);
+  iframe.style.opacity = '0';
+  body.append(iframe);
+
+  telegramWebView.addEventListener('share_game', shareMessage);
+  telegramWebView.addEventListener('share_score', shareMessage);
+
+  const botId = message.viaBotId || message.fromId;
+  const middlewareHelper = getMiddleware();
+  const avatar = avatarNew({
+    peerId: botId ? (botId as UserId).toPeerId(false) : message.peerId,
+    size: 24,
+    middleware: middlewareHelper.get()
+  });
+  await avatar.readyThumbPromise;
+
+  return createRoot((dispose) => {
+    const initialState: BrowserPageProps = {
+      title: game.title || '',
+      icon: avatar.node,
+      menuButtons: [{
+        icon: 'forward',
+        text: 'ShareFile',
+        onClick: shareMessage,
+        verify: () => true
+      }],
+      dispose,
+      content: body,
+      cacheKey
+    };
+
+    onCleanup(() => {
+      telegramWebView.destroy();
+      middlewareHelper.destroy();
+    });
+
+    queueMicrotask(() => telegramWebView.onMount());
+
+    const lastState = lastContext?.[0];
+    if(lastState && lastState?.page.isCatalogue) {
+      lastContext[1].replace(initialState, lastContext[0].page);
+    } else {
+      openInAppBrowser(initialState);
+    }
   });
 }
 
@@ -791,7 +958,7 @@ export async function openCatalogueInAppBrowser() {
       icon: IconTsx({icon: 'plus'}),
       dispose,
       content: (
-        <Scrollable class={styles.BrowserCatalogueScrollable}>
+        <Scrollable>
           <div
             class={styles.BrowserCatalogue}
             onClick={(e) => {
@@ -877,4 +1044,182 @@ function Loader<T>(props: {
       {ready() && props.children(rendered)}
     </>
   );
+}
+
+type InstantViewPageExtraProps = {
+  url: string,
+  setAnchor: Setter<string>
+};
+
+export function openInstantViewInAppBrowser({
+  webPageId: _webPageId,
+  cachedPage,
+  HotReloadGuardProvider,
+  anchor
+}: {
+  webPageId?: Long,
+  cachedPage?: Page | string,
+  HotReloadGuardProvider: typeof SolidJSHotReloadGuardProvider,
+  anchor?: string // * expect it to be '#name'
+}) {
+  if(!cachedPage && anchor) {
+    (lastContext[0].page as BrowserPageProps<InstantViewPageExtraProps>).setAnchor(anchor);
+    return;
+  }
+
+  const TEST_PART = false;
+  let hadCachedPage = typeof(cachedPage) !== 'string';
+  let url: string;
+  if(hadCachedPage) {
+    assumeType<Page>(cachedPage);
+    url = cachedPage.url;
+    if(TEST_PART) {
+      cachedPage.blocks = cachedPage.blocks.slice(0, -5);
+    }
+
+    // * preload page first because anchor can be missing
+    if(anchor && cachedPage.pFlags.part) {
+      hadCachedPage = false;
+      cachedPage = undefined;
+    }
+  } else {
+    url = cachedPage as string;
+    cachedPage = undefined;
+    anchor = new URL(url).hash;
+
+    if(/* anchor &&  */lastContext && lastContext[0].page) {
+      const page = lastContext[0].page as BrowserPageProps<InstantViewPageExtraProps>;
+      const u1 = new URL(page.url);
+      const u2 = new URL(url);
+      u2.hash = u1.hash = '';
+      // * protocol can be http or https
+      if(u1.hostname === u2.hostname && u1.pathname === u2.pathname) {
+        page.setAnchor(anchor);
+        return;
+      }
+    }
+  }
+
+  assumeType<Page>(cachedPage);
+
+  const [webPageId, setWebPageId] = createSignal<Long>(_webPageId);
+  const [page, setPageStore] = createStore<Page>(undefined);
+  const [pageResource] = createResource<Page>(async() => {
+    if(
+      !TEST_PART &&
+      hadCachedPage &&
+      (!cachedPage.pFlags.part && cachedPage.views !== undefined)
+    ) {
+      return cachedPage;
+    }
+
+    if(TEST_PART) await pause(10000);
+    return rootScope.managers.appWebPagesManager.getWebPage(url)
+    .then((webPage) => {
+      setWebPageId(webPage.id);
+      return (webPage as WebPage.webPage).cached_page;
+    });
+  }, {initialValue: cachedPage});
+
+  const needFadeIn = !hadCachedPage;
+  createRoot((dispose) => {
+    createComputed(() => {
+      if(pageResource()) {
+        setPageStore(reconcile(pageResource()));
+      }
+    });
+
+    const [_anchor, setAnchor] = createSignal(anchor, {equals: false});
+    const [appSettings, setAppSettings] = useAppSettings();
+
+    const waitForReady = !lastContext && hadCachedPage;
+    let wasReady = false;
+    const onReady = () => {
+      if(wasReady) {
+        return;
+      }
+
+      wasReady = true;
+      openInAppBrowser(initialState);
+    };
+
+    const scaleModifier = 0.1;
+    const changeScale = (add: boolean, e: MouseEvent) => {
+      cancelEvent(e);
+      setAppSettings(
+        'instantView',
+        'scale',
+        (value) => clamp(+(value + (add ? scaleModifier : -scaleModifier)).toFixed(2), 0.5, 1.5)
+      );
+      return false;
+    };
+
+    const initialState: BrowserPageProps<InstantViewPageExtraProps> = {
+      get title() {
+        if(pageResource.loading && !pageResource.latest) {
+          return I18n.format('Loading', true);
+        }
+
+        const block = page.blocks.find((block) => block._ === 'pageBlockTitle');
+        if(!block) {
+          return /* webPage().site_name ||  */'Instant View';
+        }
+
+        const textWithEntities = wrapTelegramRichText(block.text);
+        return limitSymbols(textWithEntities.text, 20);
+      },
+      menuButtons: [{
+        element: (
+          <span class={classNames('btn-menu-item', styles.ScaleMenu)}>
+            <span class={classNames(styles.ScaleMenuSmaller, 'hover-effect')} onClick={changeScale.bind(null, false)}>A</span>
+            <span class={styles.ScaleMenuScale}>{Math.round(appSettings.instantView.scale * 100) + '%'}</span>
+            <span class={classNames(styles.ScaleMenuBigger, 'hover-effect')} onClick={changeScale.bind(null, true)}>A</span>
+          </span>
+        ) as HTMLElement,
+        onClick: () => {}
+      }, {
+        icon: 'newtab',
+        text: 'OpenInNewTab',
+        onClick: () => safeWindowOpen(url),
+        separator: true,
+        verify: () => !!url // * markdown IV has no real URL — hide open/copy-link actions
+      }, {
+        icon: 'copy',
+        text: 'CopyLink',
+        onClick: () => {
+          copyTextToClipboard(url);
+          toastNew({langPackKey: 'LinkCopied'});
+        },
+        verify: () => !!url
+      }],
+      icon: <IconTsx icon="boostcircle_filled" />,
+      dispose,
+      content: (
+        <Show when={pageResource()}>
+          <HotReloadGuardProvider>
+            <InstantView
+              webPageId={webPageId()}
+              page={page}
+              openNewPage={(url) => {
+                openInstantViewInAppBrowser({cachedPage: url, HotReloadGuardProvider});
+              }}
+              anchor={_anchor()}
+              needFadeIn={needFadeIn}
+              collapse={() => {
+                lastContext[1].toggleCollapsed(true);
+              }}
+              onReady={waitForReady ? () => queueMicrotask(onReady) : undefined}
+            />
+          </HotReloadGuardProvider>
+        </Show>
+      ),
+
+      url,
+      setAnchor
+    };
+
+    if(!waitForReady) {
+      onReady();
+    }
+  });
 }

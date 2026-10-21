@@ -1,13 +1,7 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import SDP from '../sdp';
-import SDPMediaSection from '../sdp/mediaSection';
-import {toTelegramSource} from '../utils';
-import {parseSourceGroups} from './parseSourceGroups';
+import SDP from '@lib/calls/sdp';
+import SDPMediaSection from '@lib/calls/sdp/mediaSection';
+import {toTelegramSource} from '@lib/calls/utils';
+import {parseSourceGroups} from '@lib/calls/helpers/parseSourceGroups';
 
 export default function parseMediaSectionInfo(sdp: SDP, channel: SDPMediaSection) {
   const clientInfo = channel.lookupAttributeKeys({

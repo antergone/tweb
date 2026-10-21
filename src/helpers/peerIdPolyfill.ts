@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import isAnyChat from '../lib/appManagers/utils/peers/isAnyChat';
-import isUser from '../lib/appManagers/utils/peers/isUser';
+import isAnyChat from '@appManagers/utils/peers/isAnyChat';
+import isUser from '@appManagers/utils/peers/isUser';
 
 String.prototype.toUserId = function() {
   return (+this).toUserId();
@@ -20,7 +14,7 @@ String.prototype.toPeerId = function(isChat?: boolean) {
 };
 
 String.prototype.isPeerId = function(): this is string {
-  return /^[\d-]/.test(this.toString());
+  return /^-?\d+$/.test(this.toString());
 };
 
 // * don't return just 'this', because Firefox returns empty `Number` class

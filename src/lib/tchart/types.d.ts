@@ -1,9 +1,9 @@
-import TAnimator from './animator';
-import TChart from './chart';
-import TLines from './lines';
-import TAreas from './areas';
-import TBars from './bars';
-import {getLabelTime, getLabelDate} from './format';
+import TAnimator from '@lib/tchart/animator';
+import TChart from '@lib/tchart/chart';
+import TLines from '@lib/tchart/lines';
+import TAreas from '@lib/tchart/areas';
+import TBars from '@lib/tchart/bars';
+import {getLabelTime, getLabelDate} from '@lib/tchart/format';
 
 export type Modify<T, R> = Omit<T, keyof R> & R;
 
@@ -184,6 +184,8 @@ export type TChartState = TChartStateZoom & {
   speed?: number,
   deviceSpeed?: number,
   dims?: {[type in 'composer' | 'graph' | 'axisYLeft' | 'axisYRight' | 'axisYLines' | 'fadeTop' | 'fadeBottom' | 'axisX' | 'dates' | 'mini' | 'handle' | 'tip']: TChartDimensions},
+  // * where the range of dates stands as laid out: `DATES_SIDE`, mirrored on a right-to-left page
+  datesSide?: TChartSettings['DATES_SIDE'],
   detailInd1?: number,
   detailInd2?: number,
   zoomModeSlave?: boolean,

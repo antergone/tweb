@@ -1,10 +1,4 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {Document, InputMedia} from '../../../../layer';
+import {Document, InputMedia} from '@layer';
 
 export default function getMediaInput(doc: Document.document): InputMedia.inputMediaDocument {
   return {

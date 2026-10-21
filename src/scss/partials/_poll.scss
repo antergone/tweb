@@ -1,15 +1,10 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+@use "../shared" as *;
 
 poll-element {
   margin-top: -1px;
   display: block;
   //min-width: 280px;
   width: 330px;
-  user-select: none;
   color: var(--primary-text-color);
   
   @include respond-to(handhelds) {
@@ -287,7 +282,7 @@ poll-element {
       line-height: 16px;
       animation: none;
 
-      @include animation-level(2) {
+      @include animation-level(1) {
         transition: opacity .2s ease;
       }
     }
@@ -302,6 +297,7 @@ poll-element {
     transform: scale(.1);
     visibility: hidden;
 
+    // a hover zoom: full animations only
     @include animation-level(2) {
       transition: transform .12s ease;
     }

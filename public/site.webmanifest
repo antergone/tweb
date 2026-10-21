@@ -1,7 +1,19 @@
 {
     "name": "PrivateTG",
     "short_name": "PrivateTG",
+    "id": "/k/",
     "start_url": "./",
+    "scope": "./",
+    "scope_extensions": [
+        {
+            "type": "origin",
+            "origin": "https://t.me"
+        },
+        {
+            "type": "origin",
+            "origin": "https://telegram.me"
+        }
+    ],
     "description": "PrivateTG",
     "icons": [
         {
@@ -69,7 +81,7 @@
             }]
         }
     },
-    "theme_color": "#ffffff",
+    "theme_color": "#fffffe",
     "background_color": "#ffffff",
     "display": "standalone",
     "gcm_sender_id": "122867383838"

@@ -1,22 +1,26 @@
 import {createEffect, createMemo, createSignal, For, on, Show} from 'solid-js';
 import {createStore, reconcile} from 'solid-js/store';
-import {I18nTsx} from '../../../helpers/solid/i18n';
-import {Message, MessageMedia, TodoCompletion} from '../../../layer'
-import wrapRichText from '../../../lib/richTextProcessor/wrapRichText';
+import {I18nTsx} from '@helpers/solid/i18n';
+import {Message, MessageMedia, TodoCompletion} from '@layer'
+import wrapRichText from '@lib/richTextProcessor/wrapRichText';
 
-import styles from './checklist.module.scss';
-import CheckboxFieldTsx from '../../checkboxFieldTsx';
-import cancelEvent from '../../../helpers/dom/cancelEvent';
-import rootScope from '../../../lib/rootScope';
-import Chat from '../chat';
-import {AvatarNewTsx} from '../../avatarNew';
-import classNames from '../../../helpers/string/classNames';
-import {PeerTitleTsx} from '../../peerTitleTsx';
-import {IconTsx} from '../../iconTsx';
-import {wrapEmojiTextWithEntities} from '../../../lib/richTextProcessor/wrapEmojiText';
-import PopupPremium from '../../popups/premium';
-import {toastNew} from '../../toast';
-import wrapPeerTitle from '../../wrappers/peerTitle';
+import styles from '@components/chat/bubbles/checklist.module.scss';
+import CheckboxFieldTsx from '@components/checkboxFieldTsx';
+import Modes from '@config/modes';
+import cancelEvent from '@helpers/dom/cancelEvent';
+import rootScope from '@lib/rootScope';
+import Chat from '@components/chat/chat';
+import {AvatarNewTsx} from '@components/avatarNew';
+import classNames from '@helpers/string/classNames';
+import {PeerTitleTsx} from '@components/peerTitleTsx';
+import {IconTsx} from '@components/iconTsx';
+import {wrapEmojiTextWithEntities} from '@lib/richTextProcessor/wrapEmojiText';
+import showPremiumPopup from '@components/popups/premium';
+import {toastNew} from '@components/toast';
+import wrapPeerTitle from '@components/wrappers/peerTitle';
+import {ConfettiContainer, ConfettiRef} from '@components/confetti';
+import getPeerId from '@appManagers/utils/peers/getPeerId';
+import buttonKeyDown from '@helpers/solid/buttonKeyDown';
 
 export function ChecklistBubble(props: {
   out: boolean
@@ -30,6 +34,8 @@ export function ChecklistBubble(props: {
     setChecklist(reconcile(value));
   }))
 
+  let confetti!: ConfettiRef;
+
   const completionsById = createMemo(() => {
     const results: Record<number, TodoCompletion> = {};
     for(const item of checklist.completions ?? []) {
@@ -37,6 +43,21 @@ export function ChecklistBubble(props: {
     }
     return results;
   })
+
+  const isFullyCompleted = createMemo(() => {
+    return checklist.todo.list.every((item) => completionsById()[item.id]);
+  })
+
+  createEffect(on(isFullyCompleted, (value, prev) => {
+    if(value && !prev) {
+      confetti.create({
+        mode: 'poppers',
+        size: 4,
+        speedScale: 0.6,
+        count: 50
+      });
+    }
+  }, {defer: true}))
 
   const isGroupChecklist = checklist.todo.pFlags.others_can_complete
   const isReadonly = props.message.fwd_from || !props.out && !isGroupChecklist;
@@ -60,7 +81,7 @@ export function ChecklistBubble(props: {
     }
 
     if(!rootScope.premium) {
-      PopupPremium.show();
+      showPremiumPopup();
       return;
     }
 
@@ -76,6 +97,7 @@ export function ChecklistBubble(props: {
 
   return (
     <div class={styles.wrap}>
+      <ConfettiContainer ref={confetti} class={styles.confetti} />
       <div class={styles.title}>
         {wrapEmojiTextWithEntities(checklist.todo.title)}
       </div>
@@ -90,7 +112,7 @@ export function ChecklistBubble(props: {
             createEffect(() => {
               const completion = completionsById()[item.id];
               if(completion) {
-                setCompletedById(completion.completed_by.toPeerId());
+                setCompletedById(getPeerId(completion.completed_by));
               }
             })
 
@@ -98,13 +120,19 @@ export function ChecklistBubble(props: {
               <div
                 class={classNames(
                   styles.item,
-                  isReadonly ? styles.itemReadonly : styles.itemClickable,
-                  completionsById()[item.id] && styles.itemCompleted,
+                  isReadonly && styles.itemReadonly,
+                  completionsById()[item.id] && styles.itemCompleted
                 )}
+                role="checkbox"
+                aria-checked={Boolean(completionsById()[item.id])}
+                aria-label={item.title.text}
+                aria-readonly={isReadonly ? 'true' : undefined}
+                tabindex={isReadonly || !Modes.a11y ? undefined : 0}
                 onClick={(evt) => {
                   cancelEvent(evt);
                   handleClick(item.id);
                 }}
+                onKeyDown={isReadonly ? undefined : buttonKeyDown}
                 data-checklist-item-id={item.id}
               >
                 {isReadonly ? (
@@ -117,9 +145,29 @@ export function ChecklistBubble(props: {
                   </div>
                 ) : (
                   <div class={styles.itemCheckbox}>
-                    <CheckboxFieldTsx
-                      checked={Boolean(completionsById()[item.id])}
-                    />
+                    {/* the row is the checkbox only with the keyboard layer; without it the native one is back */}
+                    {Modes.a11y ? (
+                      <div
+                        class={classNames(
+                          'checkbox-field',
+                          'checkbox-without-caption',
+                          completionsById()[item.id] && styles.checkboxChecked
+                        )}
+                        aria-hidden="true"
+                      >
+                        <div class="checkbox-box">
+                          <div class="checkbox-box-border" />
+                          <div class="checkbox-box-background" />
+                          <svg class="checkbox-box-check" viewBox="0 0 24 24">
+                            <use href="#check" x="-1" />
+                          </svg>
+                        </div>
+                      </div>
+                    ) : (
+                      <CheckboxFieldTsx
+                        checked={Boolean(completionsById()[item.id])}
+                      />
+                    )}
                     <AvatarNewTsx
                       peerId={completedById()}
                       size={22}
@@ -132,7 +180,7 @@ export function ChecklistBubble(props: {
                     {(it) => (
                       <PeerTitleTsx
                         class={styles.itemCompletedBy}
-                        peerId={it.completed_by.toPeerId()}
+                        peerId={getPeerId(it.completed_by)}
                         onlyFirstName
                       />
                     )}

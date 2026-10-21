@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import type {InputFileLocation, InputGeoPoint, InputStickerSet, InputWebFileLocation} from '../layer';
-import type {DownloadOptions} from '../lib/mtproto/apiFileManager';
+import type {InputFileLocation, InputGeoPoint, InputStickerSet, InputWebFileLocation} from '@layer';
+import type {DownloadOptions} from '@appManagers/apiFileManager';
 
 const FILENAME_JOINER = '_';
 

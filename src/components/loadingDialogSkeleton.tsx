@@ -1,6 +1,6 @@
 import {Component, createSignal, JSX, onCleanup} from 'solid-js';
 
-import styles from './loadingDialogSkeleton.module.scss';
+import styles from '@components/loadingDialogSkeleton.module.scss';
 
 
 function pseudoRandomRange(seed: number, min: number, max: number) {
@@ -35,7 +35,7 @@ const LoadingDialogSkeleton: Component<{
       class={`${styles.Container} loading-dialog-skeleton`}
       classList={{
         [props.class]: !!props.class,
-        [styles['size' + props.size]]: true,
+        [styles[`size${props.size}` as keyof typeof styles]]: true,
         [styles.noAvatar]: props.noAvatar,
         [styles.shimmer]: animating()
       }}

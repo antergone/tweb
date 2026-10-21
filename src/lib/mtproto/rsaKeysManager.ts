@@ -1,19 +1,15 @@
 /*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- *
  * Originally from:
  * https://github.com/zhukov/webogram
  * Copyright (C) 2014 Igor Zhukov <igor.beatle@gmail.com>
  * https://github.com/zhukov/webogram/blob/master/LICENSE
  */
 
-import {TLSerialization} from './tl_utils';
-import cryptoWorker from '../crypto/cryptoMessagePort';
-import Modes from '../../config/modes';
-import bytesFromHex from '../../helpers/bytes/bytesFromHex';
-import bytesToHex from '../../helpers/bytes/bytesToHex';
+import {TLSerialization} from '@lib/mtproto/tl_utils';
+import cryptoWorker from '@lib/crypto/cryptoMessagePort';
+import Modes from '@config/modes';
+import bytesFromHex from '@helpers/bytes/bytesFromHex';
+import bytesToHex from '@helpers/bytes/bytesToHex';
 import bigInt from 'big-integer';
 
 export type RSAPublicKeyHex = {

@@ -1,25 +1,146 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+import {attachClickEvent} from '@helpers/dom/clickEvent';
+import {MissingInvitee} from '@layer';
+import {FormatterArguments, LangPackKey, i18n, join} from '@lib/langPack';
+import rootScope from '@lib/rootScope';
+import Button from '@components/button';
+import {DelimiterWithText} from '@components/chat/giveaway';
+import showPeerPopup, {PopupPeerButtonCallbackCheckboxes, PopupPeerCheckboxOptions} from '@components/popups/peer';
+import showPickUserPopup from '@components/popups/pickUser';
+import showPremiumPopup from '@components/popups/premium';
+import {AppAddMembersTab} from '@components/solidJsTabs';
+import SidebarSlider from '@components/slider';
+import {toastNew} from '@components/toast';
+import wrapPeerTitle from '@components/wrappers/peerTitle';
 
-import {FormatterArguments, LangPackKey, i18n, join} from '../lib/langPack';
-import rootScope from '../lib/rootScope';
-import PopupElement from './popups';
-import PopupPeer, {PopupPeerButtonCallbackCheckboxes, PopupPeerCheckboxOptions} from './popups/peer';
-import PopupPickUser from './popups/pickUser';
-import AppAddMembersTab from './sidebarLeft/tabs/addMembers';
-import SidebarSlider from './slider';
-import {toastNew} from './toast';
-import wrapPeerTitle from './wrappers/peerTitle';
+export async function handleMissingInvitees(chatId: ChatId, missingInvitees: MissingInvitee[]) {
+  if(!missingInvitees.length) {
+    return;
+  }
+
+  const inviteLink = await rootScope.managers.appProfileManager.getChatInviteLink(chatId);
+  const premiumRequireIds: Set<PeerId> = new Set();
+  const canInviteAsPremiumIds: Set<PeerId> = new Set();
+  const missingInviteeIds = missingInvitees.map((invitee) => {
+    const peerId = invitee.user_id.toPeerId(false);
+    if(invitee.pFlags.premium_required_for_pm) {
+      premiumRequireIds.add(peerId);
+    }
+
+    if(invitee.pFlags.premium_would_allow_invite) {
+      canInviteAsPremiumIds.add(peerId);
+    }
+
+    return peerId;
+  });
+
+  const hasPremiumSection = canInviteAsPremiumIds.size > 0;
+
+  const getTitle = (peerId: PeerId) => wrapPeerTitle({peerId, onlyFirstName: true});
+  const length = missingInviteeIds.length;
+  const title = length > 1 ? undefined : await getTitle(hasPremiumSection ? [...canInviteAsPremiumIds][0] : missingInviteeIds[0]);
+
+  const cantSendMessages = premiumRequireIds.size === missingInviteeIds.length;
+
+  const onPremiumClick = () => {
+    showPremiumPopup();
+    popup.hide();
+  };
+
+  let footerButton: HTMLElement;
+  const onCountUpdate = (count: number) => {
+    footerButton.replaceChildren(i18n(cantSendMessages ? 'InviteViaLink.Premium.Subscribe' : (count ? 'InviteViaLink.Send' : 'InviteViaLink.Skip')));
+  };
+  const initial = missingInviteeIds.filter((peerId) => !premiumRequireIds.has(peerId));
+  const popup = showPickUserPopup(
+    {
+      peerType: ['custom'],
+      getMoreCustom: async() => ({result: missingInviteeIds, isEnd: true}),
+      onSelect: async(chosen) => {
+        const peerIds = chosen.map((c) => c.peerId);
+        if(cantSendMessages) {
+          onPremiumClick();
+          return;
+        }
+
+        const length = peerIds.length;
+        if(!length) {
+          return;
+        }
+
+        peerIds.forEach((peerId) => {
+          rootScope.managers.appMessagesManager.sendText({
+            peerId,
+            text: inviteLink
+          });
+        });
+
+        toastNew({
+          langPackKey: 'InviteViaLink.LinkShared',
+          langPackArguments: [length, length > 1 ? undefined : await getTitle(peerIds[0])]
+        });
+      },
+      onChange: onCountUpdate,
+      multiSelect: true,
+      titleLangKey: hasPremiumSection ? 'InviteViaLink.Premium' : 'InviteViaLink.Title',
+      initial,
+      headerSearch: false,
+      noSearch: true,
+      footerButtonProps: /* cantSendMessages ? undefined :  */{ref: (element) => footerButton = element},
+      chatRightsActions: ['send_messages'],
+      autoHeight: cantSendMessages
+    }
+  );
+
+  onCountUpdate(initial.length);
+  if(hasPremiumSection) {
+    const container = document.createElement('div');
+    container.classList.add('popup-add-members-premium-container');
+
+    const subtitle = i18n('InviteViaLink.Premium.Subtitle', [length, title || length]);
+    subtitle.classList.add('popup-add-members-premium-subtitle');
+
+    container.append(
+      subtitle
+    );
+
+    if(!cantSendMessages) {
+      const header = i18n('InviteViaLink.Title');
+      header.classList.add('popup-add-members-premium-header');
+
+      const subtitle2 = i18n('InviteViaLink.Premium.Subtitle2');
+      subtitle2.classList.add('popup-add-members-premium-subtitle');
+
+      const premiumButton = Button(`btn-primary popup-gift-premium-confirm action-button shimmer`, {text: 'InviteViaLink.Premium.Subscribe'});
+      attachClickEvent(premiumButton, onPremiumClick);
+
+      container.append(
+        premiumButton,
+        DelimiterWithText({langKey: 'PremiumOr'}) as HTMLElement,
+        header,
+        subtitle2
+      );
+    } else {
+      popup.selector.list.remove();
+
+      footerButton.classList.add('popup-gift-premium-confirm', 'action-button', 'shimmer');
+    }
+
+    popup.selector.section.content.prepend(container);
+  } else {
+    const subtitle = i18n('InviteViaLink.Subtitle', [length, title || length]);
+    subtitle.classList.add('popup-add-members-subtitle');
+    popup.selector.section.content.prepend(subtitle);
+  }
+}
 
 export default async function addChatUsers({
   peerId,
-  slider
+  slider,
+  skippable = false
 }: {
   peerId: PeerId,
-  slider: SidebarSlider
+  slider: SidebarSlider,
+  skippable?: boolean
 }) {
   const id = peerId.toChatId();
   const isChannel = await rootScope.managers.appChatsManager.isChannel(id);
@@ -58,8 +179,8 @@ export default async function addChatUsers({
 
       if(!isChannel) {
         checkboxes = [{
-          text: 'AddOneMemberForwardMessages',
-          textArgs: [await wrapPeerTitle({peerId: peerIds[0]})],
+          text: peerIds.length > 1 ? 'AddMembersForwardMessages' : 'AddOneMemberForwardMessages',
+          textArgs: peerIds.length > 1 ? undefined : [await wrapPeerTitle({peerId: peerIds[0]})],
           checked: true
         }];
       }
@@ -67,7 +188,7 @@ export default async function addChatUsers({
 
     descriptionLangArgs.push(await wrapPeerTitle({peerId}));
 
-    PopupElement.createPopup(PopupPeer, 'popup-add-members', {
+    showPeerPopup('popup-add-members', {
       peerId,
       titleLangKey,
       titleLangArgs,
@@ -78,44 +199,35 @@ export default async function addChatUsers({
         callback
       }],
       checkboxes
-    }).show();
+    });
   };
 
   const onError = (err: ApiError) => {
     if(err.type === 'USER_PRIVACY_RESTRICTED') {
       toastNew({langPackKey: 'InviteToGroupError'});
+    }/*  else if(err.type === 'USER_NOT_MUTUAL_CONTACT') {
+      toastNew({langPackKey: 'InviteToGroupError'});
+    }  */else {
+      throw err;
     }
   };
 
-  if(isChannel) {
-    const tab = slider.createTab(AppAddMembersTab);
-    tab.open({
-      type: 'channel',
-      skippable: false,
-      takeOut: (peerIds) => {
-        showConfirmation(peerIds, () => {
-          const promise = rootScope.managers.appChatsManager.inviteToChannel(id, peerIds);
-          promise.catch(onError);
-          tab.attachToPromise(promise);
-        });
+  const tab = slider.createTab(AppAddMembersTab);
+  tab.open({
+    type: 'channel',
+    skippable,
+    takeOut: (peerIds) => {
+      showConfirmation(peerIds, (e, checked) => {
+        const promise = isChannel ?
+          rootScope.managers.appChatsManager.inviteToChannel(id, peerIds) :
+          rootScope.managers.appChatsManager.addChatUser(id, peerIds, checked.size ? undefined : 0);
+        promise.then((missingInvitees) => handleMissingInvitees(id, missingInvitees), onError);
+        tab.payload.attachToPromise(promise);
+      });
 
-        return false;
-      },
-      title: isBroadcast ? 'ChannelAddSubscribers' : 'GroupAddMembers',
-      placeholder: 'SendMessageTo'
-    });
-  } else {
-    PopupElement.createPopup(PopupPickUser, {
-      peerType: ['contacts'],
-      placeholder: 'Search',
-      onSelect: (peerId) => {
-        setTimeout(() => {
-          showConfirmation([peerId], (e, checked) => {
-            rootScope.managers.appChatsManager.addChatUser(id, peerId, checked.size ? undefined : 0)
-            .catch(onError);
-          });
-        }, 0);
-      }
-    });
-  }
+      return false;
+    },
+    title: isBroadcast ? 'ChannelAddSubscribers' : 'GroupAddMembers',
+    placeholder: 'SendMessageTo'
+  });
 }

@@ -1,10 +1,4 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {AppManager} from './manager';
+import {AppManager} from '@appManagers/manager';
 
 export default class AppUsernamesManager extends AppManager {
   public toggleUsername({
@@ -43,7 +37,7 @@ export default class AppUsernamesManager extends AppManager {
     peerId: PeerId,
     order: string[]
   }) {
-    if(!peerId) {
+    if(!peerId || peerId === this.appUsersManager.userId) {
       return this.apiManager.invokeApi('account.reorderUsernames', {order});
     } else if(peerId.isAnyChat()) {
       const chatId = peerId.toChatId();

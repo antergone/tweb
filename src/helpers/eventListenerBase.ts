@@ -1,11 +1,8 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+// import { MOUNT_CLASS_TO } from "@config/debug";
+import type {ArgumentTypes, SuperReturnType} from '@types';
+import {logger} from '@lib/logger';
 
-// import { MOUNT_CLASS_TO } from "../config/debug";
-import type {ArgumentTypes, SuperReturnType} from '../types';
+const log = logger('EVENTS');
 
 // class EventSystem {
 //   wm: WeakMap<any, Record<any, Set<any>>> = new WeakMap();
@@ -58,7 +55,9 @@ export type EventListenerListeners = Record<string, Function>;
  * Should add listener callback only once
  */
 
-type ListenerObject<T> = {callback: T, options: boolean | AddEventListenerOptions};
+type ListenerObject<T> = {callback: T, options: boolean | AddEventListenerOptions, id: number};
+
+let lastListenerId = 0;
 
 // type EventLitenerCallback<T> = (data: T) =>
 // export default class EventListenerBase<Listeners extends {[name: string]: Function}> {
@@ -83,7 +82,7 @@ export default class EventListenerBase<Listeners extends EventListenerListeners>
   }
 
   public addEventListener<T extends keyof Listeners>(name: T, callback: Listeners[T], options?: boolean | AddEventListenerOptions) {
-    const listenerObject: ListenerObject<Listeners[T]> = {callback, options};
+    const listenerObject: ListenerObject<Listeners[T]> = {callback, options, id: ++lastListenerId};
     (this.listeners[name] ??= new Set()).add(listenerObject); // ! add before because if you don't, you won't be able to delete it from callback
 
     if(this.listenerResults.hasOwnProperty(name)) {
@@ -155,19 +154,35 @@ export default class EventListenerBase<Listeners extends EventListenerListeners>
       this.listenerResults[name] = args;
     }
 
-    const arr: Array<SuperReturnType<Listeners[typeof name]>> = collectResults && [];
+    const results: Array<SuperReturnType<Listeners[typeof name]>> = collectResults && [];
 
     const listeners = this.listeners[name];
-    if(listeners) {
-      for(const listener of listeners) {
+    // * the set is iterated live, so a listener removed by an earlier one is skipped, but one added
+    // * meanwhile waits for the next dispatch, as on a DOM EventTarget: a listener that re-subscribes
+    // * from its own callback would be visited again and again, freezing the tab
+    const lastId = lastListenerId;
+    for(const listener of listeners || []) {
+      if(listener.id > lastId) {
+        continue;
+      }
+
+      try {
         const result = this.invokeListenerCallback(name, listener, ...args);
-        if(arr) {
-          arr.push(result);
+        if(results) {
+          results.push(result);
         }
+      } catch(err) {
+        if(results) {
+          throw err;
+        }
+
+        // * the other listeners still run, but the error must not vanish: an update
+        // * handler that dies halfway leaves whatever it was changing half-applied
+        log.error('listener error', name, err);
       }
     }
 
-    return arr;
+    return results;
   }
 
   public dispatchResultableEvent<T extends keyof Listeners>(name: T, ...args: ArgumentTypes<Listeners[T]>) {

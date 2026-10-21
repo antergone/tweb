@@ -1,10 +1,4 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import ctx from '../environment/ctx';
+import ctx from '@environment/ctx';
 
 type CacheFunction = (...args: any[]) => any;
 const cache: Map<CacheFunction, {result: any, timeout: number}> = new Map();

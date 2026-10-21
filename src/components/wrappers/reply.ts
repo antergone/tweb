@@ -1,18 +1,18 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+import {setDirection} from '@helpers/dom/setInnerHTML';
+import {Message, MessageEntity, MessageReplyHeader, StoryItem} from '@layer';
+import ReplyContainer from '@components/chat/replyContainer';
+import {setPeerColorToElement} from '@components/peerColors';
+import ripple from '@components/ripple';
+import wrapPeerColorPattern from '@components/wrappers/peerColorPattern';
 
-import {setDirection} from '../../helpers/dom/setInnerHTML';
-import {MessageEntity, MessageReplyHeader, User} from '../../layer';
-import appImManager from '../../lib/appManagers/appImManager';
-import {getPeerColorsByPeer} from '../../lib/appManagers/utils/peers/getPeerColorById';
-import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
-import {WrapPinnedContainerOptions} from '../chat/pinnedContainer';
-import ReplyContainer from '../chat/replyContainer';
-import ripple from '../ripple';
-import wrapEmojiPattern from './emojiPattern';
+export type WrapPinnedContainerOptions = {
+  title: string | HTMLElement | DocumentFragment,
+  subtitle?: WrapPinnedContainerOptions['title'],
+  message?: Message.message | Message.messageService,
+  storyItem?: StoryItem.storyItem,
+  isChatSensitive?: boolean,
+  savedMusicDocId?: DocId
+};
 
 export type WrapReplyOptions = WrapPinnedContainerOptions & {
   setColorPeerId?: PeerId,
@@ -34,7 +34,7 @@ export default function wrapReply(options: WrapReplyOptions) {
   setDirection(replyContainer.container);
   // replyContainer.border.classList.add('quote-like-border');
   replyContainer.border.remove();
-  ripple(replyContainer.container, undefined, undefined, true);
+  ripple(replyContainer.container);
 
   if(options.isQuote) {
     replyContainer.container.classList.add('quote-like-icon');
@@ -47,41 +47,24 @@ export default function wrapReply(options: WrapReplyOptions) {
 
   const {setColorPeerId} = options;
   if(setColorPeerId !== undefined) {
-    appImManager.setPeerColorToElement({
+    setPeerColorToElement({
       peerId: setColorPeerId,
       element: replyContainer.container,
       messageHighlighting: options.useHighlightingColor,
       colorAsOut: options.colorAsOut
     });
 
-    const peer = apiManagerProxy.getPeer(setColorPeerId);
-    const docId = (peer as User.user)?.color?.background_emoji_id;
-    if(docId) {
-      wrapEmojiPattern({
-        docId,
-        container: replyContainer.container,
-        middleware: options.middleware,
-        color: getPeerColorsByPeer(peer)[0],
-        colorAsOut: options.colorAsOut,
-        useHighlightingColor: options.useHighlightingColor,
-        positions: [
-          [104.5, 34.5, 12, .35],
-          [9.3, 33.3, 10.4, .2],
-          [51.3, 0.3, 10.4, .2],
-          [0.6, 7.6, 12.8, .1],
-          [28.9, 12.9, 15.2, .2],
-          [65.5, 18.5, 12, .25],
-          [48.9, 37.9, 15.2, .25],
-          [91.9, 7.9, 15.2, .3]
-        ],
-        canvasWidth: 117,
-        canvasHeight: 54,
-        emojiSize: 16
-      }).then((canvas) => {
-        if(options.middleware && !options.middleware()) return;
-        canvas.classList.add('reply-background-canvas');
-      });
-    }
+    wrapPeerColorPattern({
+      peerId: setColorPeerId,
+      container: replyContainer.container,
+      middleware: options.middleware,
+      withCollectible: true
+    });
+  }
+
+  if(!options.subtitle && !options.message) {
+    replyContainer.container.classList.add('reply-no-subtitle');
+    replyContainer.subtitle.remove();
   }
 
   return {container: replyContainer.container, fillPromise};

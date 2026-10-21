@@ -1,147 +1,152 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+import {Accessor, createEffect, createSignal, on, Show} from 'solid-js';
+import Modes from '@config/modes';
+import {AppManagers} from '@lib/managers';
+import {NULL_PEER_ID} from '@appManagers/constants';
+import Chat from '@components/chat/chat';
+import ChatTopbar from '@components/chat/topbar';
+import {SponsoredMessage} from '@layer';
+import classNames from '@helpers/string/classNames';
 
-import {createEffect, createSignal, on, Show} from 'solid-js';
-import {render} from 'solid-js/web';
-import {AppManagers} from '../../lib/appManagers/managers';
-import {NULL_PEER_ID} from '../../lib/mtproto/mtproto_config';
-import Chat from './chat';
-import PinnedContainer from './pinnedContainer';
-import ChatTopbar from './topbar';
-import {SponsoredMessage} from '../../layer';
-import classNames from '../../helpers/string/classNames';
+import styles from '@components/chat/topbarSponsored.module.scss';
+import {I18nTsx} from '@helpers/solid/i18n';
+import wrapRichText from '@lib/richTextProcessor/wrapRichText';
+import wrapEmojiText from '@lib/richTextProcessor/wrapEmojiText';
+import appImManager from '@lib/appImManager';
+import PhotoTsx from '@components/wrappers/photoTsx';
+import {MyPhoto} from '@appManagers/appPhotosManager';
+import showPremiumPopup from '@components/popups/premium';
+import createContextMenu from '@helpers/dom/createContextMenu';
+import {copyTextToClipboard} from '@helpers/clipboard';
+import {getSponsoredMessageButtons} from '@components/chat/contextMenu';
+import {showAdReport} from '@components/popups/reportAd';
+import createMiddleware from '@helpers/solid/createMiddleware';
+import Button from '@components/buttonTsx';
+import RippleElement from '@components/rippleElement';
+import {createTopbarPlate, TopbarPlateController} from '@components/chat/topbarPlate';
+import I18n from '@lib/langPack';
+import A11yButton from '@components/a11yButton';
 
-import styles from './topbarSponsored.module.scss';
-import {Ripple} from '../rippleTsx';
-import {I18nTsx} from '../../helpers/solid/i18n';
-import wrapRichText from '../../lib/richTextProcessor/wrapRichText';
-import wrapEmojiText from '../../lib/richTextProcessor/wrapEmojiText';
-import appImManager from '../../lib/appManagers/appImManager';
-import {getMiddleware} from '../../helpers/middleware';
-import {PhotoTsx} from '../wrappers/photo';
-import {MyPhoto} from '../../lib/appManagers/appPhotosManager';
-import {ButtonIconTsx} from '../buttonIconTsx';
-import PopupPremium from '../popups/premium';
-import createContextMenu from '../../helpers/dom/createContextMenu';
-import {copyTextToClipboard} from '../../helpers/clipboard';
-import {getSponsoredMessageButtons} from './contextMenu';
-import PopupReportAd from '../popups/reportAd';
+export type ChatSponsoredPlate = TopbarPlateController & {
+  setPeerId: (peerId: PeerId) => void
+};
 
-export default class ChatTopbarSponsored extends PinnedContainer {
-  private dispose: () => void;
-  private peerId: () => PeerId;
-  public setPeerId: (peerId: PeerId) => void;
+function SponsoredPlateBody(props: {
+  peerId: Accessor<PeerId>,
+  chat: Chat,
+  managers: AppManagers,
+  setHidden: (hidden: boolean) => void
+}) {
+  const [message, setMessage] = createSignal<SponsoredMessage>();
 
-  constructor(protected topbar: ChatTopbar, protected chat: Chat, protected managers: AppManagers) {
-    super({
-      topbar,
-      chat,
-      listenerSetter: topbar.listenerSetter,
-      className: 'sponsored',
-      floating: true,
-      height: 'auto'
+  createEffect(on(props.peerId, (peerId$) => {
+    setMessage(undefined);
+    props.setHidden(true);
+    if(peerId$ === NULL_PEER_ID || !peerId$.isUser()) return;
+    if(!props.chat.isBot) return;
+
+    props.managers.appMessagesManager.getSponsoredMessage(peerId$)
+    .then((m) => {
+      if(props.peerId() !== peerId$) return;
+
+      if(m._ === 'messages.sponsoredMessages' && m.messages.length) {
+        setMessage(m.messages[0]);
+        props.setHidden(false);
+      }
     });
+  }));
 
-    [this.peerId, this.setPeerId] = createSignal<PeerId>(NULL_PEER_ID);
-    this.dispose = render(() => this.init(), this.container);
-  }
+  const photo = () => {
+    const m = message();
+    if(m.photo) return m.photo as MyPhoto;
+    if(m.media && m.media._ === 'messageMediaPhoto') return m.media.photo as MyPhoto;
+    return undefined;
+  };
 
-  private init() {
-    const {peerId} = this;
+  const middleware = createMiddleware().get();
 
-    const [message, setMessage] = createSignal<SponsoredMessage>();
-
-    const middleware = getMiddleware()
-
-    createEffect(on(peerId, (peerId$) => {
-      setMessage(undefined);
-      this.toggle(true);
-      if(peerId$ === NULL_PEER_ID || !peerId$.isUser()) return;
-      if(!this.chat.isBot) return;
-
-      this.managers.appMessagesManager.getSponsoredMessage(peerId$).then((message) => {
-        if(peerId() !== peerId$) return;
-
-        if(message._ === 'messages.sponsoredMessages' && message.messages.length) {
-          setMessage(message.messages[0]);
-          this.toggle(false);
-        }
-      });
-    }))
-
-    const photo = () => {
-      const message$ = message();
-      if(message$.photo) return message$.photo as MyPhoto;
-      if(message$.media && message$.media._ === 'messageMediaPhoto') return message$.media.photo as MyPhoto;
-      return undefined;
-    }
-
-    return (
-      <Show when={message()}>
-        <div
-          class={/* @once */ classNames(styles.container, 'quote-like')}
-          // @ts-expect-error
-          on:click={() => appImManager.onSponsoredMessageClick(message())}
-          ref={(el) => {
-            if(!el) return;
-            return createContextMenu({
-              listenTo: el,
-              buttons: getSponsoredMessageButtons({
-                message: message(),
-                handleReportAd: () => {
-                  PopupReportAd.createAdReport(message(), () => {
-                    this.toggle(false);
-                  });
-                },
-                handleCopy: () => {
-                  copyTextToClipboard(message().message);
-                }
-              })
-            });
-          }}
-        >
-          {photo() && (
-            <div class={/* @once */ styles.photoWrap}>
-              <PhotoTsx
-                class={/* @once */ styles.photo}
-                photo={photo()}
-                boxWidth={32}
-                boxHeight={32}
-              />
-            </div>
-          )}
-          <div class={/* @once */ styles.content}>
-            <div class={/* @once */ styles.title}>
-              <I18nTsx class={/* @once */ styles.ad} key="SponsoredMessageAd" />
-              {' '}
-              {wrapEmojiText(message().title)}
-            </div>
-            <div class={/* @once */ styles.text}>
-              {wrapRichText(message().message, {entities: message().entities})}
-            </div>
-          </div>
-          <div class={/* @once */ styles.actions}>
-            <ButtonIconTsx
-              icon="close"
-              // onMouseDown={e => e.stopPropagation()}
-              noRipple
-              // @ts-expect-error
-              on:click={(e) => {
-                e.stopPropagation();
-                PopupPremium.show({feature: 'no_ads'})
-              }}
+  return (
+    <Show when={message()}>
+      <RippleElement
+        component="div"
+        class={/* @once */ classNames(styles.container, 'quote-like-hoverable', 'overflow-hidden')}
+        onClick={() => appImManager.onSponsoredMessageClick(message())}
+        ref={(el) => {
+          createContextMenu({
+            listenTo: el,
+            buttons: getSponsoredMessageButtons({
+              message: message(),
+              handleReportAd: () => {
+                showAdReport(message(), () => props.setHidden(false));
+              },
+              handleCopy: () => {
+                copyTextToClipboard(message().message);
+              }
+            }),
+            middleware
+          });
+        }}
+      >
+        <Show when={photo()}>
+          <div class={/* @once */ classNames(styles.photoWrap, 'disable-hover')}>
+            <PhotoTsx
+              class={/* @once */ styles.photo}
+              photo={photo()}
+              boxWidth={32}
+              boxHeight={32}
+              withoutPreloader
             />
           </div>
+        </Show>
+        <div class={/* @once */ classNames(styles.content, 'disable-hover')}>
+          {/* a native button only with the keyboard layer: it is inline-block, keeps its own line height and takes the focus on click */}
+          <A11yButton
+            class="text-bold"
+            style={Modes.a11y ? {color: 'inherit', 'text-align': 'inherit'} : undefined}
+          >
+            <I18nTsx class="primary" key="SponsoredMessageAd" />
+            {' '}
+            <span dir="auto">{wrapEmojiText(message().title)}</span>
+          </A11yButton>
+          <div class="pre-wrap" dir="auto">
+            {wrapRichText(message().message, {entities: message().entities})}
+          </div>
         </div>
-      </Show>
-    );
-  }
+      </RippleElement>
+      <Button.Icon
+        icon="close"
+        aria-label={I18n.format('Premium.Boarding.NoAds.Action', true)}
+        onClick={(e) => {
+          e.stopPropagation();
+          showPremiumPopup({feature: 'no_ads'});
+        }}
+      />
+    </Show>
+  );
+}
 
-  public destroy() {
-    super.destroy();
-    this.dispose();
-  }
+export default function createChatSponsoredPlate(
+  topbar: ChatTopbar,
+  chat: Chat,
+  managers: AppManagers
+): ChatSponsoredPlate {
+  const [peerId, setPeerIdSignal] = createSignal<PeerId>(NULL_PEER_ID);
+
+  const plate = createTopbarPlate({
+    modifier: 'sponsored',
+    height: 'auto',
+    onVisibilityChange: () => topbar.setFloating(),
+    render: ({setHidden}) => (
+      <SponsoredPlateBody
+        peerId={peerId}
+        chat={chat}
+        managers={managers}
+        setHidden={setHidden}
+      />
+    )
+  });
+
+  return {
+    ...plate,
+    setPeerId: (next) => setPeerIdSignal(next)
+  };
 }

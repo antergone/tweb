@@ -1,5 +1,5 @@
-import deferredPromise from '../../helpers/cancellablePromise';
-import StaticUtilityClass from '../staticUtilityClass';
+import deferredPromise from '@helpers/cancellablePromise';
+import StaticUtilityClass from '@lib/staticUtilityClass';
 
 
 export default class EncryptionKeyStore extends StaticUtilityClass {
@@ -9,6 +9,13 @@ export default class EncryptionKeyStore extends StaticUtilityClass {
 
   public static async get() {
     if(this.deferred) await this.deferred;
+    return this.key;
+  }
+
+  /**
+   * Whatever is in memory right now, `null` while nothing has been saved yet
+   */
+  public static getUndeferred() {
     return this.key;
   }
 
@@ -22,8 +29,8 @@ export default class EncryptionKeyStore extends StaticUtilityClass {
     return base64Key;
   }
 
-  public static save(key: CryptoKey | null) {
-    this.key = key;
+  public static save(key?: CryptoKey) {
+    this.key = key || null;
     this.deferred?.resolve();
     this.deferred = undefined;
   }

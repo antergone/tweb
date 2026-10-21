@@ -1,14 +1,8 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {FontFamily, FontSize, FontWeight} from '../config/font';
-import getTextWidth from '../helpers/canvas/getTextWidth';
-import mediaSizes from '../helpers/mediaSizes';
-import clamp from '../helpers/number/clamp';
-import {fastRaf} from '../helpers/schedulers';
+import {FontFamily, FontSize, FontWeight} from '@config/font';
+import getTextWidth from '@helpers/canvas/getTextWidth';
+import mediaSizes from '@helpers/mediaSizes';
+import clamp from '@helpers/number/clamp';
+import {fastRaf} from '@helpers/schedulers';
 
 // Thanks to https://stackoverflow.com/a/49349813
 
@@ -74,6 +68,16 @@ function getElementWidth(element: HTMLElement) {
     // @ts-ignore
     const size: MediaSize = mediaSize[type];
     return size.width;
+  }
+
+  // an inline one is only as wide as its text, so it would always find itself too narrow: what it
+  // may take is the room its line leaves it after whatever precedes it
+  const line = element.parentElement;
+  if(line && getComputedStyle(element).display === 'inline') {
+    const preceding = document.createRange();
+    preceding.setStart(line, 0);
+    preceding.setEndBefore(element);
+    return line.getBoundingClientRect().width - preceding.getBoundingClientRect().width;
   }
 
   return element.getBoundingClientRect().width;

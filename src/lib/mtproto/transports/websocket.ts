@@ -1,13 +1,8 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {logger, LogTypes} from '../../logger';
-import Modes from '../../../config/modes';
-import EventListenerBase from '../../../helpers/eventListenerBase';
-import {MTConnection} from './transport';
+import {logger, LogTypes} from '@lib/logger';
+import Modes from '@config/modes';
+import EventListenerBase from '@helpers/eventListenerBase';
+import {MTConnection} from '@lib/mtproto/transports/transport';
+import ctx from '@environment/ctx';
 
 const TEST_NO_WEBSOCKET = false;
 
@@ -22,6 +17,7 @@ export default class Socket extends EventListenerBase<{
   private ws: WebSocket;
   private log: ReturnType<typeof logger>;
   private debug = Modes.debug && false;
+  private connectionTimeout: number;
 
   constructor(protected dcId: number, protected url: string, logSuffix: string) {
     super();
@@ -35,8 +31,6 @@ export default class Socket extends EventListenerBase<{
     this.log = logger(`WS-${dcId}` + logSuffix, logTypes);
     this.log('constructor');
     this.connect();
-
-    return this;
   }
 
   private removeListeners() {
@@ -49,6 +43,8 @@ export default class Socket extends EventListenerBase<{
     this.ws.removeEventListener('error', this.handleError);
     this.ws.removeEventListener('message', this.handleMessage);
     this.ws = undefined;
+
+    this.clearConnectionTimeout();
   }
 
   private connect() {
@@ -58,6 +54,10 @@ export default class Socket extends EventListenerBase<{
     this.ws.addEventListener('close', this.handleClose);
     this.ws.addEventListener('error', this.handleError);
     this.ws.addEventListener('message', this.handleMessage);
+
+    this.connectionTimeout = ctx.setTimeout(() => {
+      this.handleError(new Error('CONNECTION_TIMEOUT'));
+    }, 7500);
 
     // if(Date.now() < closeSocketBefore) {
     // if(Date.now() >= closeSocketAfter) {
@@ -80,14 +80,20 @@ export default class Socket extends EventListenerBase<{
     this.handleClose();
   }
 
+  private clearConnectionTimeout() {
+    clearTimeout(this.connectionTimeout);
+    this.connectionTimeout = undefined;
+  }
+
   private handleOpen = () => {
     this.log('opened');
 
+    this.clearConnectionTimeout();
     this.debug && this.log.debug('sending init packet');
     this.dispatchEvent('open');
   };
 
-  private handleError = (e: Event) => {
+  private handleError = (e: any) => {
     this.log.error('handleError', e);
     this.close();
   };
@@ -108,6 +114,6 @@ export default class Socket extends EventListenerBase<{
   public send = (body: Uint8Array) => {
     this.debug && this.log.debug('-> body length to send:', body.length);
 
-    this.ws.send(body);
+    this.ws.send(body as Uint8Array<ArrayBuffer>);
   };
 }

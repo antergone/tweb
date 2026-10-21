@@ -1,9 +1,10 @@
-import {FontFamily} from '../config/font';
-import type {AppManagers} from '../lib/appManagers/managers';
-import {getPeerAvatarColorByPeer} from '../lib/appManagers/utils/peers/getPeerColorById';
-import getAbbreviation from '../lib/richTextProcessor/getAbbreviation';
-import drawCircle from './canvas/drawCircle';
-import customProperties from './dom/customProperties';
+import {FontFamily} from '@config/font';
+import type {AppManagers} from '@lib/managers';
+import {getPeerAvatarColorByPeer} from '@appManagers/utils/peers/getPeerColorById';
+import getAbbreviation from '@lib/richTextProcessor/getAbbreviation';
+import drawCircle from '@helpers/canvas/drawCircle';
+import customProperties from '@helpers/dom/customProperties';
+import readBlobAsDataURL from '@helpers/blob/readBlobAsDataURL';
 
 let avatarCanvas: HTMLCanvasElement;
 let avatarContext: CanvasRenderingContext2D;
@@ -16,8 +17,10 @@ export default async function createNotificationImage(
 ) {
   const peerPhoto = await managers.appPeersManager.getPeerPhoto(peerId);
   if(peerPhoto) {
-    const url = await managers.appAvatarsManager.loadAvatar(peerId, peerPhoto, 'photo_small');
-    return url;
+    const blob = await managers.appAvatarsManager.downloadAvatar(peerId, peerPhoto, 'photo_small');
+    if(blob) {
+      return readBlobAsDataURL(blob);
+    }
   }
 
   if(!avatarCanvas) {

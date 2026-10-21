@@ -1,5 +1,5 @@
-@import "../scss/variables.scss";
-@import "../scss/mixins.scss";
+@use "../scss/variables.scss" as *;
+@use "../scss/mixins.scss" as *;
 
 
 @mixin common($is-bar: true) {
@@ -16,10 +16,8 @@
   display: flex;
   align-items: center;
 
-  --background-color: var(--background-color-true);
-
-  padding: 16px;
-  padding-left: 9px;
+  padding-block: 16px;
+  padding-inline: 9px 16px;
 
   &.size72 {
     height: 72px;
@@ -54,11 +52,11 @@
         rgba(0, 0, 0, 1) 75%,
         rgba(0, 0, 0, 0) 100%
       );
-      
+
       mask-size: 200% 100%;
-      
+
       animation: shimmer 2.25s infinite linear;
-      
+
       mask-position: 50% 0;
     }
   }
@@ -66,7 +64,7 @@
 
 .Avatar {
   @include common(false);
-  margin-right: 14px;
+  margin-inline-end: 14px;
   flex-shrink: 0;
 }
 
@@ -96,11 +94,12 @@
   @include common;
 }
 
+// * the shimmer runs along the line - to the left in RTL - by one period of the mask
 @keyframes shimmer {
   0% {
     mask-position: 50% 0;
   }
   100% {
-    mask-position: -150% 0;
+    mask-position: calc(50% - 200% * var(--reflect)) 0;
   }
 }

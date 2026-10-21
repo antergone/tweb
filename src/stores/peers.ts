@@ -1,17 +1,13 @@
-// import {Accessor, createMemo} from 'solid-js';
-import {Accessor, createMemo} from 'solid-js';
 import {createStore, reconcile} from 'solid-js/store';
-import {Chat, User} from '../layer';
+import {Chat, User} from '@layer';
+import createMemoOrReturn, {ValueOrGetter} from '@helpers/solid/createMemoOrReturn';
 
-type Peer = Chat | User;
+type NotEmptyPeer = Exclude<Chat, Chat.chatEmpty> | User.user;
 
-const [state, setState] = createStore<{[peerId: PeerId]: Peer}>({});
+const [state, setState] = createStore<{[peerId: PeerId]: NotEmptyPeer}>({});
 
-type ValueOrGetter<T> = T | Accessor<T>;
-
-function createMemoOrReturn<T extends ValueOrGetter<any>, R, V = T extends Accessor<infer V> ? V : T>(valueOrGetter: T, callback: (value: V) => R): T extends Accessor<any> ? Accessor<R> : R {
-  // @ts-ignore
-  return typeof(valueOrGetter) === 'function' ? createMemo(() => callback((valueOrGetter as Accessor<T>)())) : callback(valueOrGetter);
+export function usePeers() {
+  return state;
 }
 
 export function usePeer<T extends ValueOrGetter<PeerId>>(peerId: T) {
@@ -26,10 +22,10 @@ export function useUser<T extends ValueOrGetter<UserId>>(userId: T) {
   return createMemoOrReturn<T, User>(userId, (userId) => state[userId?.toPeerId(false)] as User);
 }
 
-export function reconcilePeer(peerId: PeerId, peer: Peer) {
-  setState(peerId, reconcile(peer));
+export function reconcilePeer(peerId: PeerId, peer?: NotEmptyPeer) {
+  setState(peerId, peer === undefined ? undefined : reconcile(peer));
 }
 
-export function reconcilePeers(peers: {[peerId: PeerId]: Peer}) {
+export function reconcilePeers(peers: {[peerId: PeerId]: NotEmptyPeer}) {
   setState(/* reconcile */(peers));
 }

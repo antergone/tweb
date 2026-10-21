@@ -1,16 +1,11 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import indexOfAndSplice from '../../helpers/array/indexOfAndSplice';
-import deepEqual from '../../helpers/object/deepEqual';
-import {renderImageFromUrlPromise} from '../../helpers/dom/renderImageFromUrl';
-import mediaSizes, {ScreenSize} from '../../helpers/mediaSizes';
-import windowSize from '../../helpers/windowSize';
-import IS_IMAGE_BITMAP_SUPPORTED from '../../environment/imageBitmapSupport';
-import {IS_FIREFOX} from '../../environment/userAgent';
+import indexOfAndSplice from '@helpers/array/indexOfAndSplice';
+import clearMediaElementSource from '@helpers/dom/clearMediaElementSource';
+import deepEqual from '@helpers/object/deepEqual';
+import {renderImageFromUrlPromise} from '@helpers/dom/renderImageFromUrl';
+import mediaSizes, {ScreenSize} from '@helpers/mediaSizes';
+import windowSize from '@helpers/windowSize';
+import IS_IMAGE_BITMAP_SUPPORTED from '@environment/imageBitmapSupport';
+import {IS_FIREFOX} from '@environment/userAgent';
 
 const SCALE_PATTERN = false;
 const USE_BITMAP = IS_IMAGE_BITMAP_SUPPORTED && IS_FIREFOX;
@@ -93,6 +88,9 @@ export default class ChatBackgroundPatternRenderer {
         this.imageBitmap = imageBitmap;
         return img;
       });
+    }).catch((error) => {
+      clearMediaElementSource(img);
+      throw error;
     });
   }
 
@@ -135,6 +133,7 @@ export default class ChatBackgroundPatternRenderer {
       indexOfAndSplice(ChatBackgroundPatternRenderer.INSTANCES, this);
 
       this.imageBitmap?.close();
+      this.image && clearMediaElementSource(this.image);
       // if(this.objectUrl) {
       //   URL.revokeObjectURL(this.objectUrl);
       // }

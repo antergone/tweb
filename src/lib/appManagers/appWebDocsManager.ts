@@ -1,10 +1,4 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {DocumentAttribute, WebDocument} from '../../layer';
+import {DocumentAttribute, WebDocument} from '@layer';
 
 export default class AppWebDocsManager {
   public saveWebDocument(webDocument: WebDocument) {

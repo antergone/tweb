@@ -1,5 +1,5 @@
-import {getXIndex} from './utils';
-import {TChartUnitOptions} from './types';
+import {getXIndex} from '@lib/tchart/utils';
+import {TChartUnitOptions} from '@lib/tchart/types';
 
 type C = {[key in `ox_${string}`]: number};
 export type TChartAxisXItem = {
@@ -241,11 +241,12 @@ export default class TAxisX {
     }
 
     this.ctx.font = `${opts.settings.FONT[opts.settings.DATES_WEIGHT]} ${fontSize * dpi}px ${opts.settings.FONT.family}`;
-    this.ctx.textAlign = opts.settings.DATES_SIDE;
+    const datesSide = state.datesSide ?? opts.settings.DATES_SIDE;
+    this.ctx.textAlign = datesSide;
     this.ctx.fillStyle = opts.settings.COLORS.dates;
     this.ctx.fillText(
       datesStr,
-      (dimsDates.l + (opts.settings.DATES_SIDE === 'right' ? dimsDates.w : 0)) * dpi,
+      (dimsDates.l + (datesSide === 'right' ? dimsDates.w : 0)) * dpi,
       (dimsDates.t + dimsDates.h - 7) * dpi
     );
   }

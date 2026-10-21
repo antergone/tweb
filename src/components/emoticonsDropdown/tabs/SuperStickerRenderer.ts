@@ -1,19 +1,13 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import mediaSizes from '../../../helpers/mediaSizes';
-import {MyDocument} from '../../../lib/appManagers/appDocsManager';
-import {AppManagers} from '../../../lib/appManagers/managers';
-import animationIntersector, {AnimationItemGroup} from '../../animationIntersector';
-import LazyLoadQueue from '../../lazyLoadQueue';
-import LazyLoadQueueRepeat from '../../lazyLoadQueueRepeat';
-import wrapSticker from '../../wrappers/sticker';
-import safeAssign from '../../../helpers/object/safeAssign';
-import {getMiddleware, Middleware} from '../../../helpers/middleware';
-import noop from '../../../helpers/noop';
+import mediaSizes from '@helpers/mediaSizes';
+import {MyDocument} from '@appManagers/appDocsManager';
+import {AppManagers} from '@lib/managers';
+import animationIntersector, {AnimationItemGroup} from '@components/animationIntersector';
+import LazyLoadQueue from '@components/lazyLoadQueue';
+import LazyLoadQueueRepeat from '@components/lazyLoadQueueRepeat';
+import wrapSticker from '@components/wrappers/sticker';
+import safeAssign from '@helpers/object/safeAssign';
+import {getMiddleware, Middleware} from '@helpers/middleware';
+import noop from '@helpers/noop';
 
 export default class SuperStickerRenderer {
   public lazyLoadQueue: LazyLoadQueueRepeat;
@@ -24,6 +18,7 @@ export default class SuperStickerRenderer {
   private intersectionObserverInit: IntersectionObserverInit;
   private visibleRenderOptions: Partial<Parameters<typeof wrapSticker>[0]>;
   private withLock: boolean
+  private playOnHover: boolean
 
   constructor(options: {
     regularLazyLoadQueue: LazyLoadQueue;
@@ -32,6 +27,7 @@ export default class SuperStickerRenderer {
     intersectionObserverInit?: SuperStickerRenderer['intersectionObserverInit'];
     visibleRenderOptions?: SuperStickerRenderer['visibleRenderOptions'];
     withLock?: boolean
+    playOnHover?: boolean
   }) {
     options.withLock ??= true;
     safeAssign(this, options);
@@ -65,6 +61,7 @@ export default class SuperStickerRenderer {
       element = document.createElement('div');
       element.classList.add('grid-item', 'super-sticker');
       element.dataset.docId = '' + doc.id;
+      element.dataset.emoji = doc.stickerEmojiRaw || '';
 
       if(doc.animated) {
         this.observeAnimated(element);
@@ -84,6 +81,15 @@ export default class SuperStickerRenderer {
       middleware: element.middlewareHelper.get(),
       ...(doc.animated ? {} : this.visibleRenderOptions || {})
     });
+
+    if(this.playOnHover) {
+      element.addEventListener('mouseenter', () => {
+        const renderer = this.rendererByElement.get(element);
+        if(renderer && 'playOrRestart' in renderer) {
+          renderer.playOrRestart()
+        }
+      })
+    }
 
     return element;
   }
@@ -118,6 +124,7 @@ export default class SuperStickerRenderer {
     });
   };
 
+  private rendererByElement = new WeakMap<HTMLElement, Awaited<Awaited<ReturnType<typeof wrapSticker>>['render']>>();
   private processVisible = async(element: HTMLElement) => {
     const docId = element.dataset.docId;
     const doc = await this.managers.appDocsManager.getDoc(docId);
@@ -148,6 +155,12 @@ export default class SuperStickerRenderer {
       this.checkAnimationContainer(element, this.lazyLoadQueue.intersector.isVisible(element));
     }, noop);
 
+    if(this.playOnHover) {
+      promise.then(renderer => {
+        this.rendererByElement.set(element, renderer);
+      });
+    }
+
     /* let timeout = window.setTimeout(() => {
       console.error('processVisibleDiv timeout', div, doc);
     }, 1e3); */
@@ -158,11 +171,24 @@ export default class SuperStickerRenderer {
     const docId = element.dataset.docId;
     const doc = await this.managers.appDocsManager.getDoc(docId);
 
+    // the await above is a real worker round-trip - the cell may be back on
+    // screen; demolishing it now would yank a live canvas (visible blink).
+    // Bail and leave the old player alive - the visible flip that brought the
+    // cell back already queued processVisible, which cleans and re-wraps. The
+    // dropdown 'closed' sweep clears visibility synchronously before these
+    // continuations run, so it still demolishes hidden cells.
+    if(this.lazyLoadQueue.intersector.isVisible(element)) {
+      return;
+    }
+
     // console.log('STICKER INvisible:', /* div,  */docId);
     this.checkAnimationContainer(element, false);
 
     element.middlewareHelper?.clean();
-    element.replaceChildren();
+    // no replaceChildren - the thumb re-wrap adopts the dead canvas (pixels
+    // retained) as its bottom layer and retires it only under the decoded
+    // preview img (replacePreviousMedia), so a mis-timed demolition can never
+    // produce an empty/silhouette frame
     this.renderSticker(doc, element as HTMLDivElement);
   };
 }

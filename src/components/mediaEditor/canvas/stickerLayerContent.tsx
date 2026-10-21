@@ -1,15 +1,15 @@
 import {onCleanup, onMount} from 'solid-js';
 
-import createMiddleware from '../../../helpers/solid/createMiddleware';
-import wrapSticker from '../../wrappers/sticker';
+import createMiddleware from '@helpers/solid/createMiddleware';
+import wrapSticker from '@components/wrappers/sticker';
 
-import {useMediaEditorContext} from '../context';
-import {ResizableLayerProps} from '../types';
+import {useMediaEditorContext} from '@components/mediaEditor/context';
+import {ResizableLayerProps} from '@components/mediaEditor/types';
 
-import {ResizableContainer} from './resizableLayers';
+import {ResizableContainer} from '@components/mediaEditor/canvas/resizableLayers';
 
 export default function StickerLayerContent(props: ResizableLayerProps) {
-  const {editorState} = useMediaEditorContext();
+  const {editorState, canImageResultInGIF} = useMediaEditorContext();
 
   let container: HTMLDivElement;
 
@@ -22,8 +22,8 @@ export default function StickerLayerContent(props: ResizableLayerProps) {
       group: 'none',
       width: 500,
       height: 500,
-      play: true,
-      loop: true,
+      play: canImageResultInGIF,
+      loop: canImageResultInGIF,
       withThumb: false,
       middleware: middleware.get()
     });
@@ -36,7 +36,7 @@ export default function StickerLayerContent(props: ResizableLayerProps) {
   });
 
   const children = (
-    <div ref={container} class="media-editor__sticker-layer-content" />
+    <div ref={container} class="media-editor__sticker-layer-content" aria-hidden={true} />
   ); // Needs to be rendered here for hot reload to work properly
 
   return (

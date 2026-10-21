@@ -1,37 +1,31 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import type Chat from './chat';
-import debounce from '../../helpers/schedulers/debounce';
-import {WebDocument} from '../../layer';
-import {MyDocument} from '../../lib/appManagers/appDocsManager';
-import LazyLoadQueue from '../lazyLoadQueue';
-import Scrollable from '../scrollable';
-import AutocompleteHelper from './autocompleteHelper';
-import AutocompleteHelperController from './autocompleteHelperController';
-import Button from '../button';
-import {attachClickEvent} from '../../helpers/dom/clickEvent';
-import {MyPhoto} from '../../lib/appManagers/appPhotosManager';
-import assumeType from '../../helpers/assumeType';
-import GifsMasonry from '../gifsMasonry';
-import SuperStickerRenderer from '../emoticonsDropdown/tabs/SuperStickerRenderer';
-import mediaSizes from '../../helpers/mediaSizes';
-import readBlobAsDataURL from '../../helpers/blob/readBlobAsDataURL';
-import setInnerHTML from '../../helpers/dom/setInnerHTML';
-import renderMediaWithFadeIn from '../../helpers/dom/renderMediaWithFadeIn';
-import {AppManagers} from '../../lib/appManagers/managers';
-import wrapEmojiText from '../../lib/richTextProcessor/wrapEmojiText';
-import wrapRichText from '../../lib/richTextProcessor/wrapRichText';
-import generateQId from '../../lib/appManagers/utils/inlineBots/generateQId';
-import appDownloadManager from '../../lib/appManagers/appDownloadManager';
-import {AnimationItemGroup} from '../animationIntersector';
-import wrapPhoto from '../wrappers/photo';
-import {i18n} from '../../lib/langPack';
-import {POSTING_NOT_ALLOWED_MAP} from './input';
-import liteMode from '../../helpers/liteMode';
+import type Chat from '@components/chat/chat';
+import debounce from '@helpers/schedulers/debounce';
+import {WebDocument} from '@layer';
+import {MyDocument} from '@appManagers/appDocsManager';
+import LazyLoadQueue from '@components/lazyLoadQueue';
+import Scrollable from '@components/scrollable';
+import AutocompleteHelper from '@components/chat/autocompleteHelper';
+import AutocompleteHelperController from '@components/chat/autocompleteHelperController';
+import Button from '@components/button';
+import {attachClickEvent} from '@helpers/dom/clickEvent';
+import {MyPhoto} from '@appManagers/appPhotosManager';
+import assumeType from '@helpers/assumeType';
+import GifsMasonry from '@components/gifsMasonry';
+import SuperStickerRenderer from '@components/emoticonsDropdown/tabs/SuperStickerRenderer';
+import mediaSizes from '@helpers/mediaSizes';
+import readBlobAsDataURL from '@helpers/blob/readBlobAsDataURL';
+import setInnerHTML from '@helpers/dom/setInnerHTML';
+import renderMediaWithFadeIn from '@helpers/dom/renderMediaWithFadeIn';
+import {AppManagers} from '@lib/managers';
+import wrapEmojiText from '@lib/richTextProcessor/wrapEmojiText';
+import wrapRichText from '@lib/richTextProcessor/wrapRichText';
+import generateQId from '@appManagers/utils/inlineBots/generateQId';
+import appDownloadManager from '@lib/appDownloadManager';
+import {AnimationItemGroup} from '@components/animationIntersector';
+import wrapPhoto from '@components/wrappers/photo';
+import {i18n} from '@lib/langPack';
+import {POSTING_NOT_ALLOWED_MAP} from '@components/chat/input';
+import liteMode from '@helpers/liteMode';
 
 const ANIMATION_GROUP: AnimationItemGroup = 'INLINE-HELPER';
 // const GRID_ITEMS = 5;
@@ -57,6 +51,7 @@ export default class InlineHelper extends AutocompleteHelper {
       waitForKey: ['ArrowUp', 'ArrowDown'],
       onSelect: (target) => {
         if(!target) return false; // can happen when there is only button
+        if(this.chat.input.isEphemeralComposerMode()) return false;
         const {peerId, botId, queryId} = this.list.dataset;
         return this.chat.input.getReadyToSend(() => {
           const queryAndResultIds = generateQId(queryId, (target as HTMLElement).dataset.resultId);
@@ -88,7 +83,7 @@ export default class InlineHelper extends AutocompleteHelper {
     });
   }
 
-  public _checkQuery = async(peerId: PeerId, username: string, query: string, canSendInline: boolean) => {
+  public _checkQuery = async(peerId: PeerId, username: string, query: string, canSendInline: boolean, allowGuestChat?: boolean) => {
     const middleware = this.controller.getMiddleware();
 
     const peer = await this.managers.appUsersManager.resolveUsername(username);
@@ -98,6 +93,13 @@ export default class InlineHelper extends AutocompleteHelper {
 
     if(peer._ !== 'user' || !peer.pFlags.bot) {
       throw 'NOT_A_BOT';
+    }
+
+    // * a guest bot (bot_guestchat) is not an inline bot — a leading @guestbot is a plain, sendable
+    // * guest-chat message, so hide the inline panel and let the composer send the text as-is
+    if(allowGuestChat && peer.pFlags.bot_guestchat) {
+      this.toggle(false);
+      return {user: peer, renderPromise: Promise.resolve(), guestChat: true};
     }
 
     if(!canSendInline) {
@@ -314,7 +316,7 @@ export default class InlineHelper extends AutocompleteHelper {
       });
     });
 
-    return {user: peer, renderPromise};
+    return {user: peer, renderPromise, guestChat: false};
   };
 
   public init() {

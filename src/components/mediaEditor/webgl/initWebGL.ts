@@ -1,10 +1,10 @@
-import {Middleware} from '../../../helpers/middleware';
-import {adjustmentsConfig, AdjustmentsConfig} from '../adjustments';
-import {MediaType} from '../types';
+import {Middleware} from '@helpers/middleware';
+import {adjustmentsConfig, AdjustmentsConfig} from '@components/mediaEditor/adjustments';
+import {MediaType} from '@components/mediaEditor/types';
 
-import {initPositionBuffer, initTextureBuffer} from './initBuffers';
-import {initShaderProgram} from './initShaderProgram';
-import {loadTexture} from './loadTexture';
+import {initPositionBuffer, initTextureBuffer} from '@components/mediaEditor/webgl/initBuffers';
+import {initShaderProgram} from '@components/mediaEditor/webgl/initShaderProgram';
+import {loadTexture} from '@components/mediaEditor/webgl/loadTexture';
 
 export type RenderingPayload = Awaited<ReturnType<typeof initWebGL>>;
 
@@ -19,12 +19,19 @@ type InitWebGLArgs = {
 };
 
 export async function initWebGL({gl, mediaSrc, mediaType, videoTime, waitToSeek, middleware}: InitWebGLArgs) {
-  const [{vertexShaderSource, fragmentShaderSource}, {texture, media}] = await Promise.all([
-    import('./shaderSources'),
+  const isActive = () => (!middleware || middleware()) && gl && !gl.isContextLost();
+  if(!isActive()) return;
+  const loaded = await Promise.all([
+    import('@components/mediaEditor/webgl/shaderSources'),
     loadTexture({gl, mediaSrc, mediaType, videoTime, waitToSeek, middleware})
-  ]);
+  ]).catch(error => {
+    if(isActive()) throw error;
+  });
+  if(!isActive() || !loaded || !loaded[1]) return;
+  const [{vertexShaderSource, fragmentShaderSource}, {texture, media}] = loaded;
 
   const shaderProgram = initShaderProgram(gl, vertexShaderSource, fragmentShaderSource);
+  if(!shaderProgram) return;
 
   const buffers = {
     position: initPositionBuffer(gl, media.width, media.height),

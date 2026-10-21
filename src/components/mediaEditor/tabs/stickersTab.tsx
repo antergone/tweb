@@ -1,23 +1,26 @@
 import {batch, createEffect, createResource, createSignal, For, onCleanup, onMount, Show, useContext} from 'solid-js';
 
-import wrapEmojiText from '../../../lib/richTextProcessor/wrapEmojiText';
-import {useHotReloadGuard} from '../../../lib/solidjs/hotReloadGuard';
-import {Document, EmojiGroup, StickerSet} from '../../../layer';
-import {i18n} from '../../../lib/langPack';
+import wrapEmojiText from '@lib/richTextProcessor/wrapEmojiText';
+import {useHotReloadGuard} from '@lib/solidjs/hotReloadGuard';
+import {Document, EmojiGroup, StickerSet} from '@layer';
+import I18n, {i18n} from '@lib/langPack';
 
-import SuperStickerRenderer from '../../emoticonsDropdown/tabs/SuperStickerRenderer';
-import createMiddleware from '../../../helpers/solid/createMiddleware';
-import LazyLoadQueue from '../../lazyLoadQueue';
-import {ScrollableX} from '../../scrollable';
-import {IconTsx} from '../../iconTsx';
-import Space from '../../space';
+import SuperStickerRenderer from '@components/emoticonsDropdown/tabs/SuperStickerRenderer';
+import createMiddleware from '@helpers/solid/createMiddleware';
+import LazyLoadQueue from '@components/lazyLoadQueue';
+import {ScrollableX} from '@components/scrollable';
+import {IconTsx} from '@components/iconTsx';
+import Space from '@components/space';
 
-import useNormalizePoint from '../canvas/useNormalizePoint';
-import {HistoryItem, useMediaEditorContext} from '../context';
-import {ResizableLayer} from '../types';
-import {delay} from '../utils';
+import useNormalizePoint from '@components/mediaEditor/canvas/useNormalizePoint';
+import {HistoryItem, useMediaEditorContext} from '@components/mediaEditor/context';
+import {ResizableLayer} from '@components/mediaEditor/types';
+import {delay} from '@components/mediaEditor/utils';
 
-import {TabContentContext} from './tabContent';
+import {TabContentContext} from '@components/mediaEditor/tabs/tabContent';
+import {getStickerSetInputById} from '@lib/appManagers/utils/stickers/getStickerSetInput';
+import A11yButton from '@components/a11yButton';
+import smoothScrollBehavior from '@helpers/dom/smoothScrollBehavior';
 
 export default function StickersTab() {
   const {wrapStickerSetThumb, EmoticonsSearch} = useHotReloadGuard();
@@ -58,7 +61,7 @@ export default function StickersTab() {
     setActiveSet(String(id));
     setScrolling(true);
     container()?.querySelector(`[data-set-id="${id}"]`)?.scrollIntoView({
-      behavior: 'smooth',
+      behavior: smoothScrollBehavior(),
       block: 'start'
     });
     await delay(1000);
@@ -66,7 +69,7 @@ export default function StickersTab() {
   }
 
   function StickerSetThumb(props: {set: StickerSet.stickerSet}) {
-    let renderContainer: HTMLDivElement;
+    let renderContainer: HTMLElement;
 
 
     onMount(() => {
@@ -89,19 +92,21 @@ export default function StickersTab() {
     const isActive = () => String(props.set.id) === activeSet();
 
     return (
-      <div
-        ref={renderContainer}
+      <A11yButton
+        ref={(el: HTMLElement) => renderContainer = el}
         class="media-editor__stickers-set-thumb"
         classList={{
           'media-editor__stickers-set-thumb--active': isActive()
         }}
+        aria-label={props.set.title}
+        aria-pressed={isActive()}
         onClick={() => onStickerSetThumbClick(String(props.set.id))}
       />
     );
   }
 
   function Sticker(props: {doc: Document.document}) {
-    let container: HTMLDivElement;
+    let container: HTMLElement;
 
     onMount(() => {
       stickerRenderer.renderSticker(props.doc, container);
@@ -135,7 +140,16 @@ export default function StickersTab() {
       });
     }
 
-    return <div ref={container} class="media-editor__stickers-grid-item" onClick={onClick} />;
+    const label = () => props.doc.stickerEmojiRaw || I18n.format('AttachSticker', true);
+
+    return (
+      <A11yButton
+        ref={(el: HTMLElement) => container = el}
+        class="media-editor__stickers-grid-item"
+        aria-label={label()}
+        onClick={onClick}
+      />
+    );
   }
 
   function StickerSetLabel(props: {set: StickerSet.stickerSet}) {
@@ -158,7 +172,7 @@ export default function StickersTab() {
   }
 
   function StickerSetSection(props: {set: StickerSet.stickerSet}) {
-    const [stickers] = createResource(() => managers.appStickersManager.getStickerSet(props.set));
+    const [stickers] = createResource(() => managers.appStickersManager.getStickerSet(getStickerSetInputById(props.set)));
 
     return (
       <Show when={stickers()}>
@@ -175,7 +189,7 @@ export default function StickersTab() {
     let thumbsListScrollable: HTMLDivElement;
 
     onMount(() => {
-      document.querySelector('.media-editor__tabs')?.append(thumbsListScrollable);
+      thumbsListScrollable.ownerDocument.querySelector('.media-editor__tabs')?.append(thumbsListScrollable);
       new ScrollableX(thumbsListScrollable);
     });
     onCleanup(() => {
@@ -191,17 +205,23 @@ export default function StickersTab() {
       }}
       ref={thumbsListScrollable}
     >
-      <div class="media-editor__stickers-thumb-list">
+      <div
+        class="media-editor__stickers-thumb-list"
+        role="group"
+        aria-label={I18n.format('MediaEditor.StickerSets', true)}
+      >
         <Show when={recentStickers()?.length}>
-          <div
+          <A11yButton
             class="media-editor__stickers-recent-button"
             classList={{
               'media-editor__stickers-recent-button--active': activeSet() === 'recent'
             }}
+            aria-label={I18n.format('MediaEditor.RecentlyUsed', true)}
+            aria-pressed={activeSet() === 'recent'}
             onClick={() => onStickerSetThumbClick('recent')}
           >
-            <IconTsx icon="recent" />
-          </div>
+            <IconTsx icon="recent" aria-hidden={true} />
+          </A11yButton>
         </Show>
         <For each={stickerSets()?.sets}>{(set) => <StickerSetThumb set={set} />}</For>
       </div>

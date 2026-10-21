@@ -1,49 +1,45 @@
 /*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- *
  * Originally from:
  * https://github.com/zhukov/webogram
  * Copyright (C) 2014 Igor Zhukov <igor.beatle@gmail.com>
  * https://github.com/zhukov/webogram/blob/master/LICENSE
  */
 
-import {TLDeserialization, TLSerialization} from './tl_utils';
-import CryptoWorker from '../crypto/cryptoMessagePort';
-import sessionStorage from '../sessionStorage';
-import Schema from './schema';
-import {NetworkerFactory} from './networkerFactory';
-import {logger, LogTypes} from '../logger';
-import {InvokeApiOptions} from '../../types';
-import longToBytes from '../../helpers/long/longToBytes';
-import MTTransport from './transports/transport';
-import {nextRandomUint, randomLong} from '../../helpers/random';
-import App from '../../config/app';
-import DEBUG from '../../config/debug';
-import Modes from '../../config/modes';
-import noop from '../../helpers/noop';
-import HTTP from './transports/http';
-import type TcpObfuscated from './transports/tcpObfuscated';
+import {gzipPacked, TLDeserialization, TLSerialization} from '@lib/mtproto/tl_utils';
+import CryptoWorker from '@lib/crypto/cryptoMessagePort';
+import Schema from '@lib/mtproto/schema';
+import {logger, LogTypes} from '@lib/logger';
+import {DcId, InvokeApiOptions, TrueDcId} from '@types';
+import longToBytes from '@helpers/long/longToBytes';
+import longFromBytes from '@helpers/long/longFromBytes';
+import MTTransport from '@lib/mtproto/transports/transport';
+import {nextRandomUint, randomBytes, randomLong} from '@helpers/random';
+import Modes from '@config/modes';
+import noop from '@helpers/noop';
+import {IS_WORKER} from '@helpers/context';
+import HTTP from '@lib/mtproto/transports/http';
+import type TcpObfuscated from '@lib/mtproto/transports/tcpObfuscated';
 import bigInt from 'big-integer';
-import {ConnectionStatus} from './connectionStatus';
-import ctx from '../../environment/ctx';
-import bufferConcats from '../../helpers/bytes/bufferConcats';
-import bytesCmp from '../../helpers/bytes/bytesCmp';
-import bytesToHex from '../../helpers/bytes/bytesToHex';
-import convertToUint8Array from '../../helpers/bytes/convertToUint8Array';
-import isObject from '../../helpers/object/isObject';
-import forEachReverse from '../../helpers/array/forEachReverse';
-import sortLongsArray from '../../helpers/long/sortLongsArray';
-import randomize from '../../helpers/array/randomize';
-import deferredPromise, {CancellablePromise} from '../../helpers/cancellablePromise';
-import pause from '../../helpers/schedulers/pause';
-import {getEnvironment} from '../../environment/utils';
-import {TimeManager} from './timeManager';
-import indexOfAndSplice from '../../helpers/array/indexOfAndSplice';
-import {ActiveAccountNumber} from '../accounts/types';
-import AccountController from '../accounts/accountController';
-import makeError from '../../helpers/makeError';
+import {ConnectionStatus, ConnectionStatusChange} from '@lib/mtproto/connectionStatus';
+import ctx from '@environment/ctx';
+import bufferConcats from '@helpers/bytes/bufferConcats';
+import bytesCmp from '@helpers/bytes/bytesCmp';
+import bytesCmpConstTime from '@helpers/bytes/bytesCmpConstTime';
+import bytesToHex from '@helpers/bytes/bytesToHex';
+import isObject from '@helpers/object/isObject';
+import forEachReverse from '@helpers/array/forEachReverse';
+import sortLongsArray from '@helpers/long/sortLongsArray';
+import deferredPromise, {CancellablePromise} from '@helpers/cancellablePromise';
+import pause from '@helpers/schedulers/pause';
+import {TimeManager} from '@lib/mtproto/timeManager';
+import indexOfAndSplice from '@helpers/array/indexOfAndSplice';
+import makeError from '@helpers/makeError';
+import safeAssign from '@helpers/object/safeAssign';
+import {MTAuthKey} from '@lib/mtproto/authKey';
+import {MessageKeyUtils} from '@lib/mtproto/messageKeyUtils';
+import type TempAuthKeys from '@lib/mtproto/tempAuthKeys';
+import getTransportError from '@lib/mtproto/transports/getTransportError';
+import gzipCompress from '@helpers/gzipCompress';
 
 // console.error('networker included!', new Error().stack);
 
@@ -87,7 +83,31 @@ export type MTMessage = InvokeApiOptions & MTMessageOptions & {
 
   longPoll?: boolean,
   noResponse?: boolean, // only with http (http_wait for longPoll)
+
+  // auth.bindTempAuthKey: its msg_id and session are sealed inside
+  bindTempAuthKey?: boolean
 };
+
+type InitConnectionParams = {
+  id: number,
+  deviceModel?: string,
+  systemVersion?: string,
+  version?: string,
+  systemLangCode?: string,
+  langPack?: string,
+  langCode?: string
+};
+
+/**
+ * Whether a transport brings the answer back in the response to `send`, the
+ * way HTTP does, instead of through a read loop of its own. A socket's `send`
+ * returns nothing at all (MTTransport), so everything an HTTP send is followed
+ * up with - the response body, the long poll, the offline state - belongs to
+ * the transport that actually took the bytes and to no other.
+ */
+function isHTTPTransport(transport: MTTransport) {
+  return !import.meta.env.VITE_MTPROTO_HAS_WS || transport instanceof HTTP;
+}
 
 // const TEST_RESEND_RPC: string = 'upload.file';
 const TEST_RESEND_RPC: string = undefined;
@@ -130,13 +150,35 @@ let invokeAfterMsgConstructor: number;
 let networkerTempId = 0;
 
 export default class MTPNetworker {
-  private authKeyUint8: Uint8Array;
+  public dcId: DcId;
+  private permAuthKey: MTAuthKey;
+  private authKey: MTAuthKey;
 
   public isFileNetworker: boolean;
   private isFileUpload: boolean;
   private isFileDownload: boolean;
 
   private lastServerMessages: Set<MTLong> = new Set();
+
+  // * Sent-but-unacked requests keep their serialized body alive (an upload part is 512 KB of it),
+  // * so a networker that stops acking is a growing buffer pile - see memoryStats.
+  public getMemoryStats() {
+    let bodyBytes = 0, sent = 0;
+    for(const msgId in this.sentMessages) {
+      ++sent;
+      const body = this.sentMessages[msgId]?.body;
+      bodyBytes += (body as Uint8Array)?.byteLength ?? (body as number[])?.length ?? 0;
+    }
+
+    return {
+      sentMessages: sent,
+      sentMessageBodyBytes: bodyBytes,
+      pendingMessages: Object.keys(this.pendingMessages).length,
+      pendingAcks: this.pendingAcks.length,
+      sentResendReq: this.sentResendReq.size,
+      lastServerMessages: this.lastServerMessages.size
+    };
+  }
 
   private sentMessages: {
     [msgId: MTLong]: MTMessage
@@ -198,35 +240,50 @@ export default class MTPNetworker {
   private lastPingStartTime: number;
   private lastPingDelayDisconnectId: string;
 
-  // public onConnectionStatusChange: (online: boolean) => void;
-
-  // private debugRequests: Array<{before: Uint8Array, after: Uint8Array}> = [];
-
   private delays: typeof delays[keyof typeof delays];
   // private getNewTimeOffset: boolean;
 
-  constructor(
-    private networkerFactory: NetworkerFactory,
-    private timeManager: TimeManager,
-    public dcId: number,
-    private authKey: Uint8Array,
-    private authKeyId: Uint8Array,
-    serverSalt: Uint8Array,
-    private accountNumber: ActiveAccountNumber,
-    options: InvokeApiOptions = {}
-  ) {
-    this.authKeyUint8 = convertToUint8Array(this.authKey);
-    this.serverSalt = convertToUint8Array(serverSalt);
+  // * Perfect Forward Secrecy: the temporary keys of this DC, `authKey` is one of them
+  private tempAuthKeys?: TempAuthKeys;
 
-    this.isFileUpload = !!options.fileUpload;
-    this.isFileDownload = !!options.fileDownload;
+  private timeManager: TimeManager;
+
+  private getInitConnectionParams: () => InitConnectionParams;
+  private getBaseDcId: () => Promise<TrueDcId>;
+  private createLogger?: typeof logger;
+  private isForcedStopped?: () => boolean;
+  private updatesProcessor?: (obj: any) => void;
+  private onConnectionStatus?: (status: ConnectionStatusChange) => void;
+  private onServerSalt?: (serverSalt: Uint8Array) => void;
+
+  constructor(options: {
+    timeManager: TimeManager,
+    dcId: DcId,
+    permAuthKey: MTAuthKey,
+    // * with `tempAuthKeys` the key and the salt come from there
+    authKey?: MTAuthKey,
+    serverSalt?: Uint8Array,
+    tempAuthKeys?: TempAuthKeys,
+    isFileUpload: boolean,
+    isFileDownload: boolean,
+    getInitConnectionParams: MTPNetworker['getInitConnectionParams'],
+    getBaseDcId: MTPNetworker['getBaseDcId'],
+    createLogger?: MTPNetworker['createLogger'],
+    isForcedStopped?: MTPNetworker['isForcedStopped'],
+    updatesProcessor?: MTPNetworker['updatesProcessor'],
+    onConnectionStatus?: MTPNetworker['onConnectionStatus'],
+    onServerSalt?: MTPNetworker['onServerSalt']
+  }) {
+    safeAssign(this, options);
+    this.tempAuthKeys?.attach(this);
+
     this.isFileNetworker = this.isFileUpload || this.isFileDownload;
     this.delays = this.isFileNetworker ? delays.file : delays.client;
 
     const suffix = this.isFileUpload ? '-U' : this.isFileDownload ? '-D' : '';
-    this.name = 'NET-' + dcId + suffix;
+    this.name = 'NET-' + this.dcId + suffix;
     // this.log = logger(this.name, this.upload && this.dcId === 2 ? LogLevels.debug | LogLevels.warn | LogLevels.log | LogLevels.error : LogLevels.error);
-    this.log = logger(
+    this.log = (this.createLogger ?? logger)(
       this.name + (suffix ? '' : '-C') + '-' + networkerTempId++,
       LogTypes.Log | LogTypes.Error | LogTypes.Warn | (this.debug ? LogTypes.Debug : 0)
     );
@@ -239,18 +296,13 @@ export default class MTPNetworker {
     } */
 
     this.updateSession();
-
-    // if(!NetworkerFactory.offlineInited) {
-    //   NetworkerFactory.offlineInited = true;
-    //   /* rootScope.offline = true
-    //   rootScope.offlineConnecting = true */
-    // }
   }
 
   private updateSession() {
+    this.log('update session');
     this.seqNo = 0;
     this.prevSessionId = this.sessionId;
-    this.sessionId = randomize(new Uint8Array(8));
+    this.sessionId = randomBytes(8);
   }
 
   private updateSentMessage(sentMessageId: MTLong) {
@@ -345,44 +397,7 @@ export default class MTPNetworker {
     return this.pushMessage(message, options);
   }
 
-  public wrapApiCall(method: string, params: any = {}, options: InvokeApiOptions = {}) {
-    const log = this.log.bindPrefix('wrapApiCall');
-    const serializer = new TLSerialization(options);
-
-    if(!this.connectionInited) { // this will call once for each new session
-      log('adding invokeWithLayer');
-
-      const invokeWithLayer = Schema.API.methods.find((m) => m.method === 'invokeWithLayer');
-      if(!invokeWithLayer) throw new Error('no invokeWithLayer!');
-      serializer.storeInt(+invokeWithLayer.id, 'invokeWithLayer');
-
-      serializer.storeInt(Schema.layer, 'layer');
-
-      const initConnection = Schema.API.methods.find((m) => m.method === 'initConnection');
-      if(!initConnection) throw new Error('no initConnection!');
-
-      serializer.storeInt(+initConnection.id, 'initConnection');
-      serializer.storeInt(0x0, 'flags');
-      serializer.storeInt(App.id, 'api_id');
-      serializer.storeString(getEnvironment().USER_AGENT || 'Unknown UserAgent', 'device_model');
-      serializer.storeString(navigator.platform || 'Unknown Platform', 'system_version');
-      serializer.storeString(App.version + (App.isMainDomain ? ' ' + App.suffix : ''), 'app_version');
-      serializer.storeString(navigator.language || 'en', 'system_lang_code');
-      serializer.storeString(App.langPack, 'lang_pack');
-      serializer.storeString(this.networkerFactory.language, 'lang_code');
-      // serializer.storeInt(0x0, 'proxy');
-      /* serializer.storeMethod('initConnection', {
-        'flags': 0,
-        'api_id': App.id,
-        'device_model': navigator.userAgent || 'Unknown UserAgent',
-        'system_version': navigator.platform || 'Unknown Platform',
-        'app_version': App.version,
-        'system_lang_code': navigator.language || 'en',
-        'lang_pack': '',
-        'lang_code': navigator.language || 'en'
-      }); */
-    }
-
+  private storeApiCall(serializer: TLSerialization, method: string, params: any, options: InvokeApiOptions, log: ReturnType<typeof logger>) {
     if(options.afterMessageId) {
       if(invokeAfterMsgConstructor === undefined) {
         const m = Schema.API.methods.find((m) => m.method === 'invokeAfterMsg');
@@ -399,13 +414,51 @@ export default class MTPNetworker {
     }
 
     options.resultType = serializer.storeMethod(method, params);
+  }
+
+  public wrapApiCall(method: string, params: any = {}, options: InvokeApiOptions = {}): Promise<any> {
+    const log = this.log.bindPrefix('wrapApiCall');
+    const serializer = new TLSerialization(options);
+
+    if(!this.connectionInited) { // this will call once for each new session
+      log('adding invokeWithLayer');
+
+      serializer.storeMethod('invokeWithLayer', {
+        layer: Schema.layer,
+        query: (serializer: TLSerialization) => {
+          const initConnectionParams = this.getInitConnectionParams();
+          serializer.storeMethod('initConnection', {
+            api_id: initConnectionParams.id,
+            device_model: initConnectionParams.deviceModel,
+            system_version: initConnectionParams.systemVersion,
+            app_version: initConnectionParams.version,
+            system_lang_code: initConnectionParams.systemLangCode,
+            lang_pack: initConnectionParams.langPack,
+            lang_code: initConnectionParams.langCode,
+            query: (serializer: TLSerialization) => {
+              this.storeApiCall(serializer, method, params, options, log);
+            }
+          });
+        }
+      });
+    } else {
+      this.storeApiCall(serializer, method, params, options, log);
+    }
 
     const messageId = this.timeManager.generateId();
     const seqNo = this.generateSeqNo();
+    let body = serializer.getBytes(true);
+    if(options.gzipCompress) {
+      const packed = gzipCompress(body);
+      const wrapper = new TLSerialization({startMaxLength: (packed.length + 67) & ~3});
+      wrapper.storeInt(gzipPacked, 'gzip_packed[id]');
+      wrapper.storeBytes(packed, 'gzip_packed[packed_data]');
+      body = wrapper.getBytes(true);
+    }
     const message: MTMessage = {
       msg_id: messageId,
       seq_no: seqNo,
-      body: serializer.getBytes(true),
+      body,
       isAPI: true,
       humanReadable: method
     };
@@ -413,6 +466,58 @@ export default class MTPNetworker {
     log('call', method, message, params, options);
 
     return this.pushMessage(message, options);
+  }
+
+  /**
+   * Bind the temporary key this networker talks over to the permanent one.
+   * The inner message is MTProto 1.0 encrypted with the permanent key and
+   * carries the msg_id and the session of the call itself, so the call goes
+   * as it is, with no initConnection around it. Re-sent under another msg_id
+   * or in another session it is refused — and simply made again.
+   */
+  public async bindTempAuthKey(): Promise<boolean> {
+    const {authKey, permAuthKey, sessionId} = this;
+    const permAuthKeyId = longFromBytes(permAuthKey.id);
+    const nonce = longFromBytes(randomBytes(8));
+    const msgId = this.timeManager.generateId();
+    const seqNo = this.generateSeqNo();
+
+    this.log('binding temporary auth key', bytesToHex(authKey.id), authKey.expiresAt);
+
+    const inner = new TLSerialization({mtproto: true});
+    inner.storeObject({
+      _: 'bind_auth_key_inner',
+      nonce,
+      temp_auth_key_id: longFromBytes(authKey.id),
+      perm_auth_key_id: permAuthKeyId,
+      temp_session_id: longFromBytes(sessionId),
+      expires_at: authKey.expiresAt
+    }, 'BindAuthKeyInner');
+
+    const encryptedMessage = await this.getEncryptedOutput({
+      msg_id: msgId,
+      seq_no: 0,
+      body: inner.getBytes(true)
+    }, true);
+
+    const serializer = new TLSerialization();
+    const resultType = serializer.storeMethod('auth.bindTempAuthKey', {
+      perm_auth_key_id: permAuthKeyId,
+      nonce,
+      expires_at: authKey.expiresAt,
+      encrypted_message: encryptedMessage
+    });
+
+    const message: MTMessage = {
+      msg_id: msgId,
+      seq_no: seqNo,
+      body: serializer.getBytes(true),
+      resultType,
+      bindTempAuthKey: true,
+      humanReadable: 'auth.bindTempAuthKey'
+    };
+
+    return this.pushMessage(message, {}) as Promise<any>;
   }
 
   public changeTransport(transport?: MTTransport) {
@@ -453,9 +558,10 @@ export default class MTPNetworker {
     }
 
     transport.networker = this;
+    transport.noScheduler = true;
 
     if(import.meta.env.VITE_MTPROTO_HAS_HTTP) {
-      if(!import.meta.env.VITE_MTPROTO_HAS_WS || transport instanceof HTTP) {
+      if(isHTTPTransport(transport)) {
         if(!this.isFileNetworker || HTTP_POLLING_NEEDED_FOR_FILES) {
           this.longPollInterval = ctx.setInterval(this.checkLongPoll, 10000);
           this.checkLongPoll();
@@ -484,6 +590,52 @@ export default class MTPNetworker {
 
   public destroy() {
     this.log('destroy');
+    this.changeTransport();
+    this.tempAuthKeys?.detach(this);
+  }
+
+  /**
+   * Says whether there is a key to send over. Over temporary keys, moves to
+   * the next one once the current key has expired or is gone.
+   */
+  private hasAuthKey() {
+    const tempAuthKeys = this.tempAuthKeys;
+    if(!tempAuthKeys || tempAuthKeys.isUsable(this.authKey)) {
+      return true;
+    }
+
+    const authKey = tempAuthKeys.getAuthKey();
+    if(!authKey) {
+      return false;
+    }
+
+    this.setAuthKey(authKey);
+    return true;
+  }
+
+  /**
+   * A new key is a new session on the server: everything sent is sent again
+   * there, under ids of the new session.
+   */
+  private setAuthKey(authKey: MTAuthKey) {
+    this.log('switching to temporary auth key', bytesToHex(authKey.id), authKey.expiresAt);
+
+    this.authKey = authKey;
+    this.serverSalt = authKey.serverSalt;
+    this.connectionInited = false;
+    this.updateSession();
+
+    for(const msgId of sortLongsArray(Object.keys(this.sentMessages))) {
+      delete this.pendingMessages[msgId];
+      // * a container has no body: what it held goes again on its own
+      if(this.sentMessages[msgId].container) {
+        delete this.sentMessages[msgId];
+      } else {
+        this.updateSentMessage(msgId);
+      }
+    }
+
+    this.resend();
   }
 
   public forceReconnectTimeout() {
@@ -718,6 +870,12 @@ export default class MTPNetworker {
       return;
     }
 
+    if(!this.hasAuthKey()) {
+      log('no auth key yet');
+      this.checkConnectionTimeout = ctx.setTimeout(() => this.checkConnection('waiting for auth key'), 1000);
+      return;
+    }
+
     const serializer = new TLSerialization({mtproto: true});
     const pingId = randomLong();
 
@@ -778,7 +936,10 @@ export default class MTPNetworker {
         this.checkConnectionTimeout = ctx.setTimeout(() => this.checkConnection('from toggleOffline'), delay);
         this.checkConnectionPeriod = Math.min(CHECK_CONNECTION_MAX_PERIOD, (1 + this.checkConnectionPeriod) * 1.5);
 
-        if(!import.meta.env.VITE_MTPROTO_WORKER) {
+        // Attach when running in the main realm (legacy main-thread MTProto OR
+        // Modes.noWorker). The build-time VITE_MTPROTO_WORKER flag is unset only
+        // in the legacy case; IS_WORKER covers both at runtime.
+        if(!IS_WORKER) {
           document.body.addEventListener('online', this.checkConnection, false);
           document.body.addEventListener('focus', this.checkConnection, false);
         }
@@ -786,7 +947,7 @@ export default class MTPNetworker {
         this.onTransportOpen();
         this.checkLongPoll();
 
-        if(!import.meta.env.VITE_MTPROTO_WORKER) {
+        if(!IS_WORKER) {
           document.body.removeEventListener('online', this.checkConnection);
           document.body.removeEventListener('focus', this.checkConnection);
         }
@@ -799,12 +960,12 @@ export default class MTPNetworker {
     }
   }
 
-  private handleSentEncryptedRequestHTTP(promise: ReturnType<MTPNetworker['sendEncryptedRequest']>, message: MTMessage, noResponseMsgs: string[]) {
+  private handleSentEncryptedRequestHTTP(promise: ReturnType<MTPNetworker['sendEncryptedRequest']>, message: MTMessage, noResponseMessages: MTMessage[]) {
     if(!import.meta.env.VITE_MTPROTO_HAS_HTTP) {
       return;
     }
     // let timeout = setTimeout(() => {
-    //   this.log.error('handleSentEncryptedRequestHTTP timeout', promise, message, noResponseMsgs);
+    //   this.log.error('handleSentEncryptedRequestHTTP timeout', promise, message, noResponseMessages);
     // }, 5e3);
 
     promise.then(async(result) => {
@@ -820,21 +981,42 @@ export default class MTPNetworker {
       this.log.error('encrypted request failed', error, message);
 
       this.pushResend(message.msg_id);
-      this.toggleOffline(true);
+
+      // * over HTTP a transport error comes as the status code; a temporary
+      // * key gone this way is simply replaced, anything else waits offline
+      const authKeyNotFound = (error?.originalError as Response)?.status === 404;
+      if(authKeyNotFound) {
+        this.onTransportError(-404);
+      }
+
+      if(!authKeyNotFound || !this.tempAuthKeys) {
+        this.toggleOffline(true);
+      }
 
       return false;
     }).then((shouldResolve) => {
       // clearTimeout(timeout);
-      const sentMessages = this.sentMessages;
-      noResponseMsgs.forEach((msgId) => {
-        const sentMessage = sentMessages[msgId];
-        if(sentMessage) {
-          const {deferred} = sentMessage;
-          delete sentMessages[msgId];
-          delete this.pendingMessages[msgId];
-          shouldResolve ? deferred.resolve() : deferred.reject();
-        }
-      });
+      this.settleNoResponseMessages(noResponseMessages, shouldResolve);
+    });
+  }
+
+  /**
+   * An http_wait is answered by the response to its own send and by nothing
+   * else, so whoever sent it settles it - a long poll left pending keeps
+   * `sendLongPoll` from ever sending another one.
+   *
+   * ! by the message and not by its id: `cleanupSent` takes an http_wait out
+   * ! of `sentMessages` as soon as it goes out, and an id no longer leads to it
+   */
+  private settleNoResponseMessages(noResponseMessages: MTMessage[], shouldResolve: boolean) {
+    if(!import.meta.env.VITE_MTPROTO_HAS_HTTP) {
+      return;
+    }
+
+    noResponseMessages.forEach(({msg_id, deferred}) => {
+      delete this.sentMessages[msg_id];
+      delete this.pendingMessages[msg_id];
+      shouldResolve ? deferred?.resolve() : deferred?.reject();
     });
   }
 
@@ -862,11 +1044,6 @@ export default class MTPNetworker {
     }
 
     return promise;
-  }
-
-  private async getBaseDcId() {
-    const accountData = await AccountController.get(this.accountNumber);
-    return accountData?.dcId;
   }
 
   public attachPromise(promise: Promise<any>, message: MTMessage) {
@@ -922,18 +1099,16 @@ export default class MTPNetworker {
     this.status = status;
 
     if(willChange) {
-      if(this.networkerFactory.onConnectionStatusChange) {
-        this.networkerFactory.onConnectionStatusChange({
-          _: 'networkerStatus',
-          status,
-          dcId: this.dcId,
-          name: this.name,
-          isFileNetworker: this.isFileNetworker,
-          isFileDownload: this.isFileDownload,
-          isFileUpload: this.isFileUpload,
-          retryAt
-        });
-      }
+      this.onConnectionStatus?.({
+        _: 'networkerStatus',
+        status,
+        dcId: this.dcId,
+        name: this.name,
+        isFileNetworker: this.isFileNetworker,
+        isFileDownload: this.isFileDownload,
+        isFileUpload: this.isFileUpload,
+        retryAt
+      });
 
       if(this.isOnline && scheduleRequestIfOnline) {
         this.scheduleRequest();
@@ -946,9 +1121,6 @@ export default class MTPNetworker {
 
       // this.getNewTimeOffset = true;
     }
-    /* if(this.onConnectionStatusChange) {
-      this.onConnectionStatusChange(this.isOnline);
-    } */
   }
 
   public onTransportOpen() {
@@ -994,57 +1166,20 @@ export default class MTPNetworker {
     this.scheduleRequest(delay);
   }
 
-  // * correct, fully checked
-  private async getMsgKey(dataWithPadding: Uint8Array, isOut: boolean) {
-    const x = isOut ? 0 : 8;
-    const msgKeyLargePlain = bufferConcats(this.authKeyUint8.subarray(88 + x, 88 + x + 32), dataWithPadding);
-
-    const msgKeyLarge = await CryptoWorker.invokeCrypto('sha256', msgKeyLargePlain);
-    const msgKey = new Uint8Array(msgKeyLarge).subarray(8, 24);
-    return msgKey;
-  };
-
-  // * correct, fully checked
-  private async getAesKeyIv(msgKey: Uint8Array, isOut: boolean): Promise<[Uint8Array, Uint8Array]> {
-    const x = isOut ? 0 : 8;
-    const sha2aText = new Uint8Array(52);
-    const sha2bText = new Uint8Array(52);
-    const promises: Array<Promise<Uint8Array>> = [];
-
-    sha2aText.set(msgKey, 0);
-    sha2aText.set(this.authKeyUint8.subarray(x, x + 36), 16);
-    promises.push(CryptoWorker.invokeCrypto('sha256', sha2aText));
-
-    sha2bText.set(this.authKeyUint8.subarray(40 + x, 40 + x + 36), 0);
-    sha2bText.set(msgKey, 36);
-    promises.push(CryptoWorker.invokeCrypto('sha256', sha2bText));
-
-    const results = await Promise.all(promises);
-
-    const aesKey = new Uint8Array(32);
-    const aesIv = new Uint8Array(32);
-    const sha2a = new Uint8Array(results[0]);
-    const sha2b = new Uint8Array(results[1]);
-
-    aesKey.set(sha2a.subarray(0, 8));
-    aesKey.set(sha2b.subarray(8, 24), 8);
-    aesKey.set(sha2a.subarray(24, 32), 24);
-
-    aesIv.set(sha2b.subarray(0, 8));
-    aesIv.set(sha2a.subarray(8, 24), 8);
-    aesIv.set(sha2b.subarray(24, 32), 24);
-
-    return [aesKey, aesIv];
-  }
-
   public isStopped() {
-    return this.networkerFactory.akStopped && !this.isFileNetworker;
+    return (this.isForcedStopped?.() ?? false) && !this.isFileNetworker;
   }
 
   private performScheduledRequest() {
     const log = this.log.bindPrefix('performScheduledRequest');
     if(this.isStopped()) {
       log('is stopped');
+      return false;
+    }
+
+    // * everything waits here while the next temporary key is being made
+    if(!this.hasAuthKey()) {
+      log('waiting for temporary auth key');
       return false;
     }
 
@@ -1148,7 +1283,7 @@ export default class MTPNetworker {
         messagesByteLen += messageByteLength;
 
         if(import.meta.env.VITE_MTPROTO_HAS_HTTP) {
-          if(message.isAPI) {
+          if(message.isAPI || message.bindTempAuthKey) {
             hasApiCall = true;
           } else if(message.longPoll) {
             hasHttpWait = true;
@@ -1164,7 +1299,7 @@ export default class MTPNetworker {
     }
 
     if(import.meta.env.VITE_MTPROTO_HAS_HTTP) {
-      if(!import.meta.env.VITE_MTPROTO_HAS_WS || this.transport instanceof HTTP) {
+      if(isHTTPTransport(this.transport)) {
         if(hasApiCall && !hasHttpWait) {
           const options: MTMessageOptions = {...HTTP_WAIT_OPTIONS, noSchedule: true};
           this.wrapMtpCall('http_wait', {
@@ -1186,9 +1321,9 @@ export default class MTPNetworker {
       return;
     }
 
-    let noResponseMsgs: Array<string>;
+    let noResponseMessages: MTMessage[];
     if(import.meta.env.VITE_MTPROTO_HAS_HTTP) {
-      noResponseMsgs = messages.filter((message) => message.noResponse).map((message) => message.msg_id);
+      noResponseMessages = messages.filter((message) => message.noResponse);
     }
 
     if(messages.length > 1) {
@@ -1201,13 +1336,10 @@ export default class MTPNetworker {
       this.sentMessages[outMessage.msg_id] = outMessage;
     }
 
-    const promise = this.sendEncryptedRequest(outMessage);
-
-    if(import.meta.env.VITE_MTPROTO_HAS_HTTP) {
-      if(!import.meta.env.VITE_MTPROTO_HAS_WS || this.transport instanceof HTTP) {
-        this.handleSentEncryptedRequestHTTP(promise, outMessage, noResponseMsgs);
-      }
-    }
+    const promise = this.sendEncryptedRequest(outMessage, noResponseMessages);
+    // * over a socket nothing waits for it: what doesn't go out (the networker
+    // * has been taken off its connection meanwhile) is sent again on reconnect
+    promise.catch(noop);
 
     this.cleanupSent();
 
@@ -1250,142 +1382,145 @@ export default class MTPNetworker {
     };
   }
 
-  private async getEncryptedMessage(dataWithPadding: Uint8Array) {
-    const msgKey = await this.getMsgKey(dataWithPadding, true);
-    const keyIv = await this.getAesKeyIv(msgKey, true);
-    // this.log('after msg key iv')
+  private async getEncryptedMessage(authKey: MTAuthKey, dataWithPadding: Uint8Array, padding: number, v1?: boolean) {
+    const msgKey = await MessageKeyUtils.getMsgKey(
+      authKey.key,
+      padding && v1 ? dataWithPadding.subarray(0, -padding) : dataWithPadding,
+      false,
+      v1
+    );
 
-    const encryptedBytes = await CryptoWorker.invokeCrypto('aes-encrypt', dataWithPadding, keyIv[0], keyIv[1]);
-    // this.log('Finish encrypt')
+    const messageKeyData = await MessageKeyUtils.getAesKeyIv(
+      authKey.key,
+      msgKey,
+      false,
+      v1
+    );
+
+    const encryptedBytes = await CryptoWorker.invokeCrypto(
+      'aes-encrypt',
+      dataWithPadding,
+      messageKeyData.aesKey,
+      messageKeyData.aesIv
+    );
 
     return {
       bytes: encryptedBytes,
-      msgKey
+      msgKey,
+      messageKeyData
     };
   }
 
-  private async getDecryptedMessage(msgKey: Uint8Array, encryptedData: Uint8Array) {
-    // this.log('get decrypted start')
-    const keyIv = await this.getAesKeyIv(msgKey, false);
-    // this.log('after msg key iv')
-    return CryptoWorker.invokeCrypto('aes-decrypt', encryptedData, keyIv[0], keyIv[1]);
+  private async getDecryptedMessage(authKey: MTAuthKey, msgKey: Uint8Array, encryptedData: Uint8Array) {
+    const messageKeyData = await MessageKeyUtils.getAesKeyIv(
+      authKey.key,
+      msgKey,
+      true
+    );
+
+    return CryptoWorker.invokeCrypto(
+      'aes-decrypt',
+      encryptedData,
+      messageKeyData.aesKey,
+      messageKeyData.aesIv
+    );
   }
 
-  private async getEncryptedOutput(message: MTMessage) {
-    /* if(DEBUG) {
-      this.log.debug('Send encrypted', message, this.authKeyId);
-    } */
-    /* if(!this.isOnline) {
-      this.log('trying to send message when offline:', Object.assign({}, message));
-      //debugger;
-    } */
-
+  private async getEncryptedOutput(message: MTMessage, v1?: boolean) {
+    // * taken before anything is awaited: the key may be switched meanwhile
+    const authKey = v1 ? this.permAuthKey : this.authKey;
+    const messageLength = message.body.length;
     const data = new TLSerialization({
-      startMaxLength: message.body.length + 2048
+      startMaxLength: messageLength + 2048
     });
 
-    data.storeIntBytes(this.serverSalt, 64, 'salt');
-    data.storeIntBytes(this.sessionId, 64, 'session_id');
+    if(v1) {
+      const random = randomBytes(128 / 8);
+      data.storeIntBytes(random, 128, 'random');
+    } else {
+      data.storeIntBytes(this.serverSalt, 64, 'salt');
+      data.storeIntBytes(this.sessionId, 64, 'session_id');
+    }
 
     data.storeLong(message.msg_id, 'message_id');
     data.storeInt(message.seq_no, 'seq_no');
 
-    data.storeInt(message.body.length, 'message_data_length');
+    data.storeInt(messageLength, 'message_data_length');
     data.storeRawBytes(message.body, 'message_data');
 
-    /* const des = new TLDeserialization(data.getBuffer().slice(16));
-    const desSalt = des.fetchLong();
-    const desSessionId = des.fetchLong();
-
-    if(!this.isOnline) {
-      this.log.error('trying to send message when offline', message, new Uint8Array(des.buffer), desSalt, desSessionId);
-    } */
-
-    /* const messageDataLength = message.body.length;
-    let canBeLength = 0; // bytes
-    canBeLength += 8;
-    canBeLength += 8;
-    canBeLength += 8;
-    canBeLength += 4;
-    canBeLength += 4;
-    canBeLength += message.body.length; */
-
-    const dataBuffer = data.getBuffer();
-
-    /* if(dataBuffer.byteLength !== canBeLength || !bytesCmp(new Uint8Array(dataBuffer.slice(dataBuffer.byteLength - message.body.length)), new Uint8Array(message.body))) {
-      this.log.error('wrong length', dataBuffer, canBeLength, message.msg_id);
-    } */
-
-    const paddingLength = (16 - (data.getOffset() % 16)) + 16 * (1 + nextRandomUint(8) % 5);
-    const padding = /* (message as any).padding ||  */randomize(new Uint8Array(paddingLength))/* .fill(0) */;
-    /* const padding = [167, 148, 207, 226, 86, 192, 193, 57, 124, 153, 174, 145, 159, 1, 5, 70, 127, 157,
-      51, 241, 46, 85, 141, 212, 139, 234, 213, 164, 197, 116, 245, 70, 184, 40, 40, 201, 233, 211, 150,
-      94, 57, 84, 1, 135, 108, 253, 34, 139, 222, 208, 71, 214, 90, 67, 36, 28, 167, 148, 207, 226, 86, 192, 193, 57, 124, 153, 174, 145, 159, 1, 5, 70, 127, 157,
-      51, 241, 46, 85, 141, 212, 139, 234, 213, 164, 197, 116, 245, 70, 184, 40, 40, 201, 233, 211, 150,
-      94, 57, 84, 1, 135, 108, 253, 34, 139, 222, 208, 71, 214, 90, 67, 36, 28].slice(0, paddingLength); */
-
-    // (message as any).padding = padding;
-
-    const dataWithPadding = bufferConcats(dataBuffer, padding);
-    // this.log('Adding padding', dataBuffer, padding, dataWithPadding)
-    // this.log('auth_key_id', bytesToHex(self.authKeyID))
-
-    /* if(dataWithPadding.byteLength % 16) {
-      this.log.error('aaa', dataWithPadding, paddingLength);
+    let paddingLength = (16 - (data.getOffset() % 16)) + 16 * (1 + nextRandomUint(8) % 5);
+    if(v1) {
+      paddingLength = (32 + messageLength) % 16;
+      if(paddingLength) {
+        paddingLength = 16 - paddingLength;
+      }
     }
 
-    if(message.fileUpload) {
-      this.log('Send encrypted: body length:', (message.body as ArrayBuffer).byteLength, paddingLength, dataWithPadding);
-    } */
+    const padding = randomBytes(paddingLength);
+    const dataWithPadding = bufferConcats(data.getBuffer(), padding);
 
-    // * full next block is correct
-    const encryptedResult = await this.getEncryptedMessage(dataWithPadding);
-    /* if(DEBUG) {
-      this.log('Got encrypted out message', encryptedResult);
-    } */
+    const encryptedResult = await this.getEncryptedMessage(authKey, dataWithPadding, paddingLength, v1);
 
     const request = new TLSerialization({
       startMaxLength: encryptedResult.bytes.length + 256
     });
-    request.storeIntBytes(this.authKeyId, 64, 'auth_key_id');
+    request.storeIntBytes(authKey.id, 64, 'auth_key_id');
     request.storeIntBytes(encryptedResult.msgKey, 128, 'msg_key');
     request.storeRawBytes(encryptedResult.bytes, 'encrypted_data');
 
     const requestData = request.getBytes(true);
-
-    // if(this.isFileNetworker) {
-    //   //this.log('Send encrypted: requestData length:', requestData.length, requestData.length % 16, paddingLength % 16, paddingLength, data.offset, encryptedResult.msgKey.length % 16, encryptedResult.bytes.length % 16);
-    //   //this.log('Send encrypted: messageId:', message.msg_id, requestData.length);
-    //   //this.log('Send encrypted:', message, new Uint8Array(bufferConcat(des.buffer, padding)), requestData, this.serverSalt.hex, this.sessionId.hex/* new Uint8Array(des.buffer) */);
-    //   this.debugRequests.push({before: new Uint8Array(bufferConcat(des.buffer, padding)), after: requestData});
-    // }
-
     return requestData;
   }
 
-  private async sendEncryptedRequest(message: MTMessage) {
+  private async sendEncryptedRequest(message: MTMessage, noResponseMessages?: MTMessage[]) {
     const log = this.log.bindPrefix('sendEncryptedRequest');
-    const requestData = await this.getEncryptedOutput(message);
 
-    if(!this.transport) {
-      log.error('trying to send something when offline', this.transport, this);
+    let requestData: Uint8Array;
+    try {
+      requestData = await this.getEncryptedOutput(message);
+    } catch(error) {
+      // * nothing went out at all, and the follow-up below is never reached:
+      // * the batch stays unanswered, and over HTTP nothing else would settle
+      // * the http_wait it was carrying. The transport has not been read yet,
+      // * so the one it would have gone to is the one that answers for it
+      if(import.meta.env.VITE_MTPROTO_HAS_HTTP && noResponseMessages && isHTTPTransport(this.transport)) {
+        this.handleSentEncryptedRequestHTTP(Promise.reject(error), message, noResponseMessages);
+      } else {
+        log.error('could not encrypt', error, message);
+      }
+
+      throw error;
+    }
+
+    // * taken once, after the encryption: the transport may have been swapped
+    // * meanwhile (`https` -> `websocket` right after startup), and the bytes
+    // * go to the one that is here now - so everything below follows it too
+    const transport = this.transport;
+    if(!transport) {
+      log.error('trying to send something when offline', transport, this);
     }
 
     log.debug('sending', message, [message.msg_id].concat(message.inner || []), requestData.length);
-    const promise: Promise<Uint8Array> = this.transport ? this.transport.send(requestData) as any : Promise.reject({});
+    const promise: Promise<Uint8Array> = transport ? transport.send(requestData) as any : Promise.reject({});
 
     if(!import.meta.env.VITE_MTPROTO_HAS_HTTP) {
       return promise;
     }
 
-    if(import.meta.env.VITE_MTPROTO_HAS_WS && !(this.transport instanceof HTTP)) {
+    // * a socket returns nothing here and answers through its own read loop,
+    // * where an http_wait of this batch would wait for an answer forever
+    if(!isHTTPTransport(transport)) {
+      if(noResponseMessages) {
+        this.settleNoResponseMessages(noResponseMessages, false);
+      }
+
       return promise;
     }
 
     const baseError = makeError('NETWORK_BAD_RESPONSE');
     baseError.code = 406;
 
-    return promise.then((result) => {
+    const responsePromise = promise.then((result) => {
       if(!result?.byteLength) {
         throw baseError;
       }
@@ -1401,12 +1536,63 @@ export default class MTPNetworker {
 
       throw error;
     });
+
+    // * the follow-up is attached here and not by the caller: only now is it
+    // * known that the message went out over HTTP and that its answer is on
+    // * its way back in the response body
+    if(noResponseMessages) {
+      this.handleSentEncryptedRequestHTTP(responsePromise, message, noResponseMessages);
+    }
+
+    return responsePromise;
   }
 
   public async onTransportData(data: Uint8Array, packetTime: number = Date.now()) {
-    const response = await this.parseResponse(data);
+    // * nothing readable came back, and it is never silently dropped. An empty
+    // * packet off a socket is a stray frame that carries no answer to recover;
+    // * no packet at all means a send that was to bring one answered nothing,
+    // * so everything still unanswered goes out again, as after a reconnect
+    if(!data?.byteLength) {
+      this.log.error('no packet to handle', data, this.transport);
+      if(!data) {
+        this.resend();
+      }
+
+      return;
+    }
+
+    const errorCode = getTransportError(data);
+    if(errorCode !== undefined) {
+      this.onTransportError(errorCode);
+      return;
+    }
+
+    let response: Awaited<ReturnType<MTPNetworker['parseResponse']>>;
+    try {
+      response = await this.parseResponse(data);
+    } catch(err) {
+      this.log.error('can\'t parse response', err);
+      return;
+    }
+
+    // * the networker has moved to another key while this was being decrypted
+    if(response.authKey !== this.authKey) {
+      return;
+    }
+
     // this.debug && this.log.debug('server response', response);
     this.processMessage(response.response, response.messageId, response.sessionId, packetTime);
+  }
+
+  private onTransportError(code: number) {
+    this.log.error('transport error', code);
+    if(code !== -404) {
+      return;
+    }
+
+    // * the server does not know the key: a temporary one has expired or been
+    // * dropped, and a new one takes its place
+    this.tempAuthKeys?.invalidate(this.authKey);
   }
 
   public async parseResponse(responseBuffer: Uint8Array) {
@@ -1419,18 +1605,23 @@ export default class MTPNetworker {
 
     let deserializer = new TLDeserialization(responseBuffer);
 
+    // * a late answer of a session left on the previous key doesn't match anymore
+    const authKey = this.authKey;
     const authKeyId = deserializer.fetchIntBytes(64, true, 'auth_key_id');
-    if(!bytesCmp(authKeyId, this.authKeyId)) {
-      throw new Error('[MT] Invalid server auth_key_id: ' + bytesToHex(authKeyId));
+    if(!authKey || !bytesCmp(authKeyId, authKey.id)) {
+      const hex = bytesToHex(authKeyId.slice().reverse());
+      const possibleNumber = 0xffffffff - parseInt(hex, 16);
+      throw new Error('[MT] Invalid auth_key_id error: ' + possibleNumber + ' ' + hex);
+      // throw new Error('[MT] Invalid server auth_key_id: ' + bytesToHex(authKeyId));
     }
 
     const msgKey = deserializer.fetchIntBytes(128, true, 'msg_key');
     const encryptedData = deserializer.fetchRawBytes(responseBuffer.byteLength - deserializer.getOffset(), true, 'encrypted_data');
 
-    const dataWithPadding = await this.getDecryptedMessage(msgKey, encryptedData);
+    const dataWithPadding = await this.getDecryptedMessage(authKey, msgKey, encryptedData);
     // this.log('after decrypt')
-    const calcMsgKey = await this.getMsgKey(dataWithPadding, false);
-    if(!bytesCmp(msgKey, calcMsgKey)) {
+    const calcMsgKey = await MessageKeyUtils.getMsgKey(authKey.key, dataWithPadding, true);
+    if(!bytesCmpConstTime(msgKey, calcMsgKey)) {
       this.log.warn('[MT] msg_keys', msgKey, calcMsgKey);
       this.updateSession(); // fix 28.01.2020
       throw new Error('[MT] server msgKey mismatch, updating session');
@@ -1476,13 +1667,13 @@ export default class MTPNetworker {
       response,
       messageId,
       sessionId,
-      seqNo
+      seqNo,
+      authKey
     };
   }
 
   private parseResponseMessageBody(messageBody: Uint8Array) {
-    // let buffer = bytesToArrayBuffer(messageBody);
-    const deserializer = new TLDeserialization<MTLong>(/* buffer */messageBody, {
+    const deserializer = new TLDeserialization<MTLong>(messageBody, {
       mtproto: true,
       override: {
         mt_message: (result: any, field: string) => {
@@ -1491,8 +1682,6 @@ export default class MTPNetworker {
           result.bytes = deserializer.fetchInt(field + '[bytes]');
 
           const offset = deserializer.getOffset();
-
-          // this.log('mt_message!!!!!', result, field);
 
           try {
             result.body = deserializer.fetchObject('Object', field + '[body]');
@@ -1535,12 +1724,12 @@ export default class MTPNetworker {
 
   private applyServerSalt(newServerSalt: string) {
     const serverSalt = longToBytes(newServerSalt);
-
-    AccountController.update(this.accountNumber, {
-      ['dc' + this.dcId + '_server_salt']: bytesToHex(serverSalt)
-    });
-
     this.serverSalt = new Uint8Array(serverSalt);
+    this.authKey.serverSalt = this.serverSalt;
+    // * a salt of a temporary key is not worth keeping
+    if(!this.tempAuthKeys) {
+      this.onServerSalt?.(this.serverSalt);
+    }
   }
 
   private clearNextReq() {
@@ -1568,7 +1757,7 @@ export default class MTPNetworker {
     } */
 
     if(import.meta.env.VITE_MTPROTO_HAS_HTTP) {
-      if(!import.meta.env.VITE_MTPROTO_HAS_WS || this.transport instanceof HTTP) {
+      if(isHTTPTransport(this.transport)) {
         if(this.offline) {
           this.checkConnection('forced schedule');
         }
@@ -1593,7 +1782,7 @@ export default class MTPNetworker {
       this.clearNextReq();
 
       if(import.meta.env.VITE_MTPROTO_HAS_HTTP) {
-        if(!import.meta.env.VITE_MTPROTO_HAS_WS || this.transport instanceof HTTP) {
+        if(isHTTPTransport(this.transport)) {
           if(this.offline) {
             log('cancel scheduled');
             return;
@@ -1631,7 +1820,7 @@ export default class MTPNetworker {
     let delay: number;
 
     if(import.meta.env.VITE_MTPROTO_HAS_HTTP) {
-      if(!import.meta.env.VITE_MTPROTO_HAS_WS || this.transport instanceof HTTP) {
+      if(isHTTPTransport(this.transport)) {
         delay = 30000;
       }
     }
@@ -1728,7 +1917,7 @@ export default class MTPNetworker {
       }
     }
 
-    if((this.transport as TcpObfuscated).connection) {
+    if((this.transport as TcpObfuscated)?.connection) {
       this.clearPingDelayDisconnect();
       this.sendPingDelayDisconnect();
     }
@@ -1832,7 +2021,6 @@ export default class MTPNetworker {
 
             const changedTimeOffset = this.applyServerTime(messageId);
             if(message.error_code === 17 || changedTimeOffset) {
-              log('update session');
               this.updateSession();
             }
 
@@ -1885,11 +2073,13 @@ export default class MTPNetworker {
         this.processMessageAck(message.first_msg_id);
         this.applyServerSalt(message.server_salt);
 
-        this.getBaseDcId().then((baseDcId) => {
-          if(baseDcId === this.dcId && !this.isFileNetworker) {
-            this.networkerFactory.updatesProcessor?.(message);
-          }
-        });
+        if(!this.isFileNetworker) {
+          this.getBaseDcId().then((baseDcId) => {
+            if(baseDcId === this.dcId) {
+              this.updatesProcessor?.(message);
+            }
+          });
+        }
         break;
       }
 
@@ -1964,6 +2154,14 @@ export default class MTPNetworker {
           const {deferred} = sentMessage;
           const {result} = message;
           if(result._ === 'rpc_error') {
+            // * the server has forgotten the binding: the request waits for
+            // * the next key and goes again over it
+            if(this.tempAuthKeys && result.error_message === 'AUTH_KEY_PERM_EMPTY') {
+              log.warn('temporary auth key is not bound anymore', sentMessage);
+              this.tempAuthKeys.invalidate(this.authKey);
+              break;
+            }
+
             const error = this.processError(result);
             log('rpc error', result, sentMessage, error);
             deferred?.reject(error);
@@ -2017,9 +2215,7 @@ export default class MTPNetworker {
           this.log.debug('Update', message);
         } */
 
-        if(this.networkerFactory.updatesProcessor !== null) {
-          this.networkerFactory.updatesProcessor(message);
-        }
+        this.updatesProcessor?.(message);
         break;
     }
   }

@@ -1,12 +1,6 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import assumeType from '../../helpers/assumeType';
-import {AccountThemes, AccountWallPapers, InputWallPaper, WallPaper} from '../../layer';
-import {AppManager} from './manager';
+import assumeType from '@helpers/assumeType';
+import {AccountThemes, AccountWallPapers, InputWallPaper, WallPaper} from '@layer';
+import {AppManager} from '@appManagers/manager';
 
 type WallPaperId = WallPaper['id'];
 

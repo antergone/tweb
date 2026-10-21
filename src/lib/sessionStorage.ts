@@ -1,16 +1,10 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
+import type {DcId} from '@types';
+import {MOUNT_CLASS_TO} from '@config/debug';
 
-import type {DcId} from '../types';
-import {MOUNT_CLASS_TO} from '../config/debug';
-
-import type {AppInstance} from './mtproto/singleInstance';
-import type {UserAuth} from './mtproto/mtproto_config';
-import LocalStorageController from './localStorage';
-import {AccountSessionData} from './accounts/types';
+import type {AppInstance} from '@lib/singleInstance';
+import type {UserAuth} from '@appManagers/constants';
+import LocalStorageController from '@lib/localStorage';
+import {AccountSessionData} from '@lib/accounts/types';
 
 
 type StorageValues = {
@@ -21,7 +15,9 @@ type StorageValues = {
   account3: AccountSessionData,
   account4: AccountSessionData,
 
-  encryption_key?: string, // Will be quickly set and removed when switching between accounts
+  // @deprecated the passcode key is handed over in window.sessionStorage now
+  // (@lib/passcode/keyHandoff) — kept only so old, on-disk values can be purged
+  encryption_key?: string,
 
   server_time_offset: number,
   xt_instance: AppInstance,

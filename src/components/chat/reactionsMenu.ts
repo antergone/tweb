@@ -1,43 +1,43 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import type {PeerAvailableReactions} from '../../lib/appManagers/appReactionsManager';
-import IS_TOUCH_SUPPORTED from '../../environment/touchSupport';
-import {IS_MOBILE, IS_SAFARI} from '../../environment/userAgent';
-import filterUnique from '../../helpers/array/filterUnique';
-import assumeType from '../../helpers/assumeType';
-import callbackifyAll from '../../helpers/callbackifyAll';
-import deferredPromise from '../../helpers/cancellablePromise';
-import cancelEvent from '../../helpers/dom/cancelEvent';
-import {attachClickEvent} from '../../helpers/dom/clickEvent';
-import findUpClassName from '../../helpers/dom/findUpClassName';
-import ListenerSetter from '../../helpers/listenerSetter';
-import liteMode from '../../helpers/liteMode';
-import {Middleware, getMiddleware} from '../../helpers/middleware';
-import noop from '../../helpers/noop';
-import {fastRaf} from '../../helpers/schedulers';
-import {Message, AvailableReaction, Reaction, AvailableEffect, EmojiGroup} from '../../layer';
-import {AppManagers} from '../../lib/appManagers/managers';
-import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
-import lottieLoader from '../../lib/rlottie/lottieLoader';
-import RLottiePlayer from '../../lib/rlottie/rlottiePlayer';
-import rootScope from '../../lib/rootScope';
-import animationIntersector, {AnimationItemGroup} from '../animationIntersector';
-import ButtonIcon from '../buttonIcon';
-import {EmoticonsDropdown} from '../emoticonsDropdown';
-import EmojiTab from '../emoticonsDropdown/tabs/emoji';
-import wrapSticker from '../wrappers/sticker';
-import {i18n} from '../../lib/langPack';
-import anchorCallback from '../../helpers/dom/anchorCallback';
-import PopupPremium from '../popups/premium';
-import contextMenuController from '../../helpers/contextMenuController';
-import callbackify from '../../helpers/callbackify';
-import partition from '../../helpers/array/partition';
-import {PAID_REACTION_EMOJI_DOCID} from '../../lib/customEmoji/constants';
-import {StarsStar} from '../popups/stars';
+import type {PeerAvailableReactions} from '@appManagers/appReactionsManager';
+import Button from '@components/button';
+import Modes from '@config/modes';
+import {attachPickerGrid} from '@helpers/dom/attachListNavigation';
+import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
+import {IS_MOBILE, IS_SAFARI} from '@environment/userAgent';
+import filterUnique from '@helpers/array/filterUnique';
+import assumeType from '@helpers/assumeType';
+import callbackifyAll from '@helpers/callbackifyAll';
+import deferredPromise from '@helpers/cancellablePromise';
+import cancelEvent from '@helpers/dom/cancelEvent';
+import {attachClickEvent} from '@helpers/dom/clickEvent';
+import findUpClassName from '@helpers/dom/findUpClassName';
+import {getOverlayRoot} from '@helpers/appWindow';
+import ListenerSetter from '@helpers/listenerSetter';
+import liteMode from '@helpers/liteMode';
+import {Middleware, getMiddleware} from '@helpers/middleware';
+import noop from '@helpers/noop';
+import {fastRaf} from '@helpers/schedulers';
+import {Message, AvailableReaction, Reaction, AvailableEffect, EmojiGroup} from '@layer';
+import {AppManagers} from '@lib/managers';
+import apiManagerProxy from '@lib/apiManagerProxy';
+import lottieLoader from '@lib/lottie/lottieLoader';
+import LottiePlayer from '@lib/lottie/lottiePlayer';
+import rootScope from '@lib/rootScope';
+import {stashFlightSource, warmUpGenericEffectAssets, warmUpReactionEffect} from '@components/chat/reaction';
+import animationIntersector, {AnimationItemGroup} from '@components/animationIntersector';
+import ButtonIcon from '@components/buttonIcon';
+import {EmoticonsDropdown} from '@components/emoticonsDropdown';
+import EmojiTab from '@components/emoticonsDropdown/tabs/emoji';
+import wrapSticker from '@components/wrappers/sticker';
+import {i18n} from '@lib/langPack';
+import anchorCallback from '@helpers/dom/anchorCallback';
+import showPremiumPopup from '@components/popups/premium';
+import contextMenuController from '@helpers/contextMenuController';
+import callbackify from '@helpers/callbackify';
+import partition from '@helpers/array/partition';
+import {PAID_REACTION_EMOJI_DOCID} from '@lib/customEmoji/constants';
+import {StarsStar} from '@components/popups/stars';
+import {cleanEmoji} from '@lib/richTextProcessor/fixEmoji';
 
 const REACTIONS_CLASS_NAME = 'btn-menu-reactions';
 const REACTION_CLASS_NAME = REACTIONS_CLASS_NAME + '-reaction';
@@ -51,8 +51,8 @@ const CAN_USE_TRANSFORM = !IS_SAFARI;
 const SCALE_ON_HOVER = CAN_USE_TRANSFORM && false;
 
 type ChatReactionsMenuPlayers = {
-  select?: RLottiePlayer,
-  appear?: RLottiePlayer,
+  select?: LottiePlayer,
+  appear?: LottiePlayer,
   selectWrapper: HTMLElement,
   appearWrapper: HTMLElement,
   reaction: Reaction
@@ -121,7 +121,7 @@ export class ChatReactionsMenu {
         [
           anchorCallback(() => {
             contextMenuController.close();
-            PopupPremium.show({feature: 'saved_tags'});
+            showPremiumPopup({feature: 'saved_tags'});
           })
         ]
       );
@@ -131,6 +131,11 @@ export class ChatReactionsMenu {
 
     const reactionsContainer = this.container = document.createElement('div');
     reactionsContainer.classList.add(REACTIONS_CLASS_NAME/* , 'btn-menu-transition' */);
+    this.middlewareHelper.get().onDestroy(attachPickerGrid(
+      reactionsContainer,
+      `.${REACTION_CLASS_NAME}`,
+      (element) => element.getAttribute('aria-label')
+    ));
 
     // const shadow = document.createElement('div');
     // shadow.classList.add('inner-shadow');
@@ -166,6 +171,11 @@ export class ChatReactionsMenu {
       const players = this.reactionsMap.get(reactionDiv);
       if(!players) return;
 
+      // * snapshot the clicked element (instant flight source) + kick off the
+      // * clean first-frame render that upgrades it
+      if(!this.isEffects) {
+        stashFlightSource(players.reaction, reactionDiv);
+      }
       this.onFinish(players.reaction);
     }, {listenerSetter: this.listenerSetter});
 
@@ -180,7 +190,7 @@ export class ChatReactionsMenu {
     }
 
     if(hasMore && !this.noMoreButton) {
-      const moreButton = ButtonIcon(`${this.openSide === 'bottom' ? 'down' : 'up'} ${REACTIONS_CLASS_NAME}-more`, {noRipple: true});
+      const moreButton = ButtonIcon(`${this.openSide === 'bottom' ? 'down' : 'up'} ${REACTIONS_CLASS_NAME}-more`, {noRipple: true, ariaLabel: 'MultiAccount.More'});
       this.container.append(moreButton);
       attachClickEvent(
         moreButton,
@@ -202,7 +212,11 @@ export class ChatReactionsMenu {
   ) {
     if(availableReactions) {
       this.availableReactions = availableReactions;
-      this.freeCustomEmoji = new Set(this.availableReactions.map((availableReaction) => availableReaction.select_animation.id));
+      this.freeCustomEmoji = new Set(
+        this.availableReactions
+        .map((availableReaction) => availableReaction.select_animation.id)
+        .concat(reactions.map((reaction) => this.reactionToDocId(reaction)))
+      );
     }
 
     const renderPromises = reactions.slice(0, REACTIONS_MAX_LENGTH).map((reaction) => {
@@ -222,6 +236,10 @@ export class ChatReactionsMenu {
   }
 
   private async prepareReactions(message?: Message.message | Message.messageService) {
+    // * most reactions resolve to the generic effect - have its assets ready
+    // * by the time the user picks one
+    warmUpGenericEffectAssets(this.managers);
+
     const middleware = this.middlewareHelper.get();
     const availableReactionsResult = apiManagerProxy.getAvailableReactions();
     const peerAvailableReactionsResult = await this.managers.acknowledged.appReactionsManager.getAvailableReactionsByMessage(message);
@@ -239,7 +257,10 @@ export class ChatReactionsMenu {
       }
 
       this.reactions = peerAvailableReactions.reactions;
-      this.noPacks = this.noSearch = peerAvailableReactions.type !== 'chatReactionsAll';
+      // At reactions_uniq_max the message can take no new distinct reaction, so hide the
+      // custom-emoji search/packs (like tdesktop/iOS/Android) — the grid is already narrowed
+      // to the present kinds; only piling onto those stays possible.
+      this.noPacks = this.noSearch = peerAvailableReactions.type !== 'chatReactionsAll' || !!peerAvailableReactions.atUniqCap;
       return this.renderReactions(peerAvailableReactions, availableReactions);
     });
 
@@ -404,8 +425,14 @@ export class ChatReactionsMenu {
         } else {
           reaction = {
             _: 'reactionEmoji',
-            emoticon: emoji.emoji
+            emoticon: cleanEmoji(emoji.emoji) // * heart can be different, like '❤' and '❤️'
           };
+        }
+
+        // * snapshot the clicked element (instant flight source) + kick off the
+        // * clean first-frame render that upgrades it
+        if(!this.isEffects) {
+          stashFlightSource(reaction, emoji.element);
         }
 
         deferred.resolve(reaction);
@@ -423,7 +450,22 @@ export class ChatReactionsMenu {
       searchFetcher: this.isEffects ? async(q) => {
         const availableEffects = await this.managers.appReactionsManager.searchAvailableEffects({q});
         return this.splitAvailableEffects(availableEffects);
-      } : undefined,
+      } : async(q) => {
+        const emojis = await this.managers.appEmojiManager.prepareAndSearchEmojis({q, limit: Infinity, minChars: 1, addCustom: true});
+        return {
+          emojis: emojis.filter((emoji) => {
+            if(!emoji.docId) {
+              if(this.availableReactions) {
+                return this.availableReactions.some((availableReaction) => availableReaction.reaction === emoji.emoji);
+              }
+
+              return false;
+            }
+
+            return true;
+          })
+        };
+      },
       groupFetcher: this.isEffects ? async(emojiGroup) => {
         const availableEffects = await this.managers.appReactionsManager.searchAvailableEffects({emoticon: (emojiGroup as EmojiGroup.emojiGroup).emoticons});
         return this.splitAvailableEffects(availableEffects);
@@ -433,7 +475,10 @@ export class ChatReactionsMenu {
 
     const emoticonsDropdown = new EmoticonsDropdown({
       tabsToRender: [emojiTab],
-      customParentElement: document.body,
+      // Mount into the active app window's body (a function so it resolves lazily at open time):
+      // while the client is popped into a Document PiP window the reactions menu lives there, so a
+      // hardcoded main-`document.body` would render this emoji picker into the now-background tab.
+      customParentElement: getOverlayRoot,
       getOpenPosition: () => this.getOpenPosition(!this.noPacks)
     });
 
@@ -455,7 +500,9 @@ export class ChatReactionsMenu {
     emoticonsDropdown.onButtonClick();
   };
 
-  private async splitAvailableEffects(availableEffects: AvailableEffect[]): ReturnType<EmojiTab['searchFetcher']> {
+  private async splitAvailableEffects(
+    availableEffects: AvailableEffect[]
+  ): Promise<Awaited<ReturnType<EmojiTab['searchFetcher']>>> {
     const [stickers, customEmojis] = partition(availableEffects, (availableEffect) => !availableEffect.effect_animation_id);
     const docIds = stickers.map((availableEffect) => availableEffect.effect_sticker_id);
     const docs = await Promise.all(docIds.map((docId) => this.managers.appDocsManager.getDoc(docId)));
@@ -478,10 +525,22 @@ export class ChatReactionsMenu {
   }
 
   private async renderReaction(reaction: Reaction, availableReaction?: AvailableReaction) {
-    const reactionDiv = document.createElement('div');
-    reactionDiv.classList.add(REACTION_CLASS_NAME);
+    if(availableReaction) {
+      warmUpReactionEffect(availableReaction);
+    }
+
+    // a native button only with the keyboard layer: it takes the focus on click
+    const reactionDiv = Button(REACTION_CLASS_NAME, {
+      noRipple: true,
+      ariaLabel: reaction._ === 'reactionPaid' ? 'StarsReactionTitle' : 'Reactions',
+      asDiv: !Modes.a11y
+    });
+    if(availableReaction?.title || reaction._ === 'reactionEmoji') {
+      reactionDiv.setAttribute('aria-label', availableReaction?.title || (reaction as Reaction.reactionEmoji).emoticon);
+    }
 
     const scaleContainer = document.createElement('div');
+    scaleContainer.setAttribute('aria-hidden', 'true');
     scaleContainer.classList.add(REACTION_CLASS_NAME + '-scale');
 
     const appearWrapper = document.createElement('div');
@@ -546,7 +605,7 @@ export class ChatReactionsMenu {
         player.addEventListener('enterFrame', (frameNo) => {
           if(player.maxFrame === frameNo) {
             selectLoadPromise.then((selectPlayer) => {
-              assumeType<RLottiePlayer>(selectPlayer);
+              assumeType<LottiePlayer>(selectPlayer);
               appearWrapper.classList.add('hide');
               selectWrapper.classList.remove('hide');
 
@@ -562,6 +621,7 @@ export class ChatReactionsMenu {
       delete options.withThumb;
 
       const wrap = () => {
+        if(doc?.stickerEmojiRaw) reactionDiv.setAttribute('aria-label', doc.stickerEmojiRaw);
         wrapSticker({
           doc,
           div: appearWrapper,
@@ -574,6 +634,16 @@ export class ChatReactionsMenu {
       let doc = availableReaction?.static_icon, delay = false;
       if(!doc) {
         const result = await this.managers.acknowledged.appEmojiManager.getCustomEmojiDocument((reaction as Reaction.reactionCustomEmoji).document_id);
+        // * a custom emoji reaction fires the effect of its base emoji - warm
+        // * it up so the click plays it instead of the generic fallback
+        if(!this.isEffects && reaction._ === 'reactionCustomEmoji') {
+          Promise.resolve(result.result).then((doc) => {
+            return doc?.stickerEmojiRaw && Promise.resolve(apiManagerProxy.getReaction(doc.stickerEmojiRaw)).then((availableReaction) => {
+              availableReaction && warmUpReactionEffect(availableReaction);
+            });
+          }).catch(noop);
+        }
+
         if(result.cached) {
           doc = await result.result;
         } else {
@@ -595,14 +665,14 @@ export class ChatReactionsMenu {
         liteModeKey: false,
         ...options
       }).then(({render}) => render).then((player) => {
-        assumeType<RLottiePlayer>(player);
+        assumeType<LottiePlayer>(player);
 
         players.appear = player;
 
         player.addEventListener('enterFrame', (frameNo) => {
           if(player.maxFrame === frameNo) {
             selectLoadPromise.then((selectPlayer) => {
-              assumeType<RLottiePlayer>(selectPlayer);
+              assumeType<LottiePlayer>(selectPlayer);
               appearWrapper.classList.add('hide');
               selectWrapper.classList.remove('hide');
 
@@ -621,7 +691,7 @@ export class ChatReactionsMenu {
         liteModeKey: false,
         ...options
       }).then(({render}) => render).then((player) => {
-        assumeType<RLottiePlayer>(player);
+        assumeType<LottiePlayer>(player);
 
         return lottieLoader.waitForFirstFrame(player);
       }).catch(noop);

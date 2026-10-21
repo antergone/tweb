@@ -1,109 +1,122 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
+import {shouldPreserveKeyboardFocus} from '@helpers/dom/isKeyboardControl';
+import createFocusTrap, {FocusTrap} from '@helpers/dom/focusTrap';
 /* @refresh reload */
 
-import {animateSingle, cancelAnimationByKey} from '../../helpers/animation';
-import cancelEvent from '../../helpers/dom/cancelEvent';
-import overlayCounter from '../../helpers/overlayCounter';
-import throttle from '../../helpers/schedulers/throttle';
-import classNames from '../../helpers/string/classNames';
-import windowSize from '../../helpers/windowSize';
-import {Document, DocumentAttribute, GeoPoint, MediaArea, MessageMedia, Reaction, StoryItem, StoryView, User, Chat as MTChat, AvailableReaction, MessageEntity} from '../../layer';
-import animationIntersector from '../animationIntersector';
-import appNavigationController, {NavigationItem} from '../appNavigationController';
-import PeerTitle from '../peerTitle';
-import SwipeHandler from '../swipeHandler';
-import styles from './viewer.module.scss';
+import {animateSingle, cancelAnimationByKey} from '@helpers/animation';
+import {bindActiveWindowListener, getAppWindow, getOverlayRoot} from '@helpers/appWindow';
+import cancelEvent from '@helpers/dom/cancelEvent';
+import getInlineArrowKeys from '@helpers/dom/getInlineArrowKeys';
+import overlayCounter from '@helpers/overlayCounter';
+import throttle from '@helpers/schedulers/throttle';
+import classNames from '@helpers/string/classNames';
+import windowSize from '@helpers/windowSize';
+import {Document, DocumentAttribute, GeoPoint, MediaArea, MessageMedia, Reaction, StoryItem, StoryView, User, Chat as MTChat, AvailableReaction, MessageEntity, StoriesStealthMode} from '@layer';
+import animationIntersector from '@components/animationIntersector';
+import appNavigationController, {NavigationItem} from '@components/appNavigationController';
+import PeerTitle from '@components/peerTitle';
+import SwipeHandler from '@components/swipeHandler';
+import styles from '@components/stories/viewer.module.scss';
 import {createSignal, createEffect, JSX, For, Accessor, onCleanup, createMemo, mergeProps, splitProps, untrack, on, getOwner, runWithOwner, createRoot, ParentProps, Signal, onMount, Setter, createReaction, Show, createRenderEffect} from 'solid-js';
 import {unwrap} from 'solid-js/store';
 import {assign, Portal} from 'solid-js/web';
-import rootScope from '../../lib/rootScope';
-import ListenerSetter from '../../helpers/listenerSetter';
-import {Middleware} from '../../helpers/middleware';
-import wrapRichText, {WrapRichTextOptions} from '../../lib/richTextProcessor/wrapRichText';
-import wrapMessageEntities from '../../lib/richTextProcessor/wrapMessageEntities';
-import tsNow from '../../helpers/tsNow';
-import {LangPackKey, i18n, joinElementsWith} from '../../lib/langPack';
-import formatDuration, {DurationType} from '../../helpers/formatDuration';
-import {easeOutCubicApply} from '../../helpers/easing/easeOutCubic';
-import findUpClassName from '../../helpers/dom/findUpClassName';
-import findUpAsChild from '../../helpers/dom/findUpAsChild';
-import {onMediaCaptionClick} from '../appMediaViewer';
-import InputFieldAnimated from '../inputFieldAnimated';
-import ChatInput from '../chat/input';
-import appImManager from '../../lib/appManagers/appImManager';
-import Chat, {ChatType} from '../chat/chat';
-import middlewarePromise from '../../helpers/middlewarePromise';
-import emoticonsDropdown from '../emoticonsDropdown';
-import PopupPickUser from '../popups/pickUser';
-import ButtonMenuToggle from '../buttonMenuToggle';
-import getPeerActiveUsernames from '../../lib/appManagers/utils/peers/getPeerActiveUsernames';
-import {copyTextToClipboard} from '../../helpers/clipboard';
-import {toastNew} from '../toast';
-import debounce from '../../helpers/schedulers/debounce';
-import appDownloadManager from '../../lib/appManagers/appDownloadManager';
-import getMediaFromMessage from '../../lib/appManagers/utils/messages/getMediaFromMessage';
-import confirmationPopup from '../confirmationPopup';
-import {formatDateAccordingToTodayNew, formatFullSentTime} from '../../helpers/date';
-import getVisibleRect from '../../helpers/dom/getVisibleRect';
-import onMediaLoad from '../../helpers/onMediaLoad';
-import {AvatarNew, avatarNew} from '../avatarNew';
-import documentFragmentToNodes from '../../helpers/dom/documentFragmentToNodes';
-import {SERVICE_PEER_ID} from '../../lib/mtproto/mtproto_config';
-import idleController from '../../helpers/idleController';
-import OverlayClickHandler from '../../helpers/overlayClickHandler';
-import getStoryPrivacyType, {StoryPrivacyType} from '../../lib/appManagers/utils/stories/privacyType';
-import wrapPeerTitle from '../wrappers/peerTitle';
-import StackedAvatars from '../stackedAvatars';
-import PopupElement from '../popups';
-import {processDialogElementForReaction} from '../popups/reactedList';
-import IS_TOUCH_SUPPORTED from '../../environment/touchSupport';
-import focusInput from '../../helpers/dom/focusInput';
-import {wrapStoryMedia} from './preview';
-import {StoriesContextPeerState, useStories, StoriesProvider} from './store';
-import createUnifiedSignal from '../../helpers/solid/createUnifiedSignal';
-import setBlankToAnchor from '../../lib/richTextProcessor/setBlankToAnchor';
-import liteMode from '../../helpers/liteMode';
-import Icon from '../icon';
-import {ChatReactionsMenu} from '../chat/reactionsMenu';
-import setCurrentTime from '../../helpers/dom/setCurrentTime';
-import ReactionElement from '../chat/reaction';
-import blurActiveElement from '../../helpers/dom/blurActiveElement';
-import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
-import reactionsEqual from '../../lib/appManagers/utils/reactions/reactionsEqual';
-import wrapSticker from '../wrappers/sticker';
-import createContextMenu from '../../helpers/dom/createContextMenu';
-import isTargetAnInput from '../../helpers/dom/isTargetAnInput';
-import {setQuizHint} from '../poll';
-import {doubleRaf} from '../../helpers/schedulers';
+import rootScope from '@lib/rootScope';
+import {Middleware} from '@helpers/middleware';
+import wrapRichText, {WrapRichTextOptions} from '@lib/richTextProcessor/wrapRichText';
+import wrapMessageEntities from '@lib/richTextProcessor/wrapMessageEntities';
+import tsNow from '@helpers/tsNow';
+import I18n, {LangPackKey, i18n, joinElementsWith} from '@lib/langPack';
+import buttonKeyDown from '@helpers/solid/buttonKeyDown';
+import Modes from '@config/modes';
+import formatDuration, {DurationType} from '@helpers/formatDuration';
+import {easeOutCubicApply} from '@helpers/easing/easeOutCubic';
+import findUpClassName from '@helpers/dom/findUpClassName';
+import findUpAsChild from '@helpers/dom/findUpAsChild';
+import {onMediaCaptionClick} from '@components/mediaViewer';
+import InputFieldAnimated from '@components/inputFieldAnimated';
+import ChatInput from '@components/chat/input';
+import appImManager from '@lib/appImManager';
+import Chat from '@components/chat/chat';
+import {ChatType} from '@components/chat/chatType';
+import middlewarePromise from '@helpers/middlewarePromise';
+import emoticonsDropdown from '@components/emoticonsDropdown';
+import showPickUserPopup from '@components/popups/pickUser';
+import ButtonMenuToggle from '@components/buttonMenuToggle';
+import getPeerActiveUsernames from '@appManagers/utils/peers/getPeerActiveUsernames';
+import {copyTextToClipboard} from '@helpers/clipboard';
+import {toastNew} from '@components/toast';
+import debounce from '@helpers/schedulers/debounce';
+import appDownloadManager from '@lib/appDownloadManager';
+import getMediaFromMessage from '@appManagers/utils/messages/getMediaFromMessage';
+import confirmationPopup from '@components/confirmationPopup';
+import {formatDateAccordingToTodayNew, formatFullSentTime} from '@helpers/date';
+import getVisibleRect from '@helpers/dom/getVisibleRect';
+import onMediaLoad from '@helpers/onMediaLoad';
+import {AvatarNew, avatarNew} from '@components/avatarNew';
+import documentFragmentToNodes from '@helpers/dom/documentFragmentToNodes';
+import {SERVICE_PEER_ID} from '@appManagers/constants';
+import idleController from '@helpers/idleController';
+import OverlayClickHandler from '@helpers/overlayClickHandler';
+import getStoryPrivacyType, {StoryPrivacyType} from '@appManagers/utils/stories/privacyType';
+import wrapPeerTitle from '@components/wrappers/peerTitle';
+import removeStoriesFromRecent from '@components/stories/removeFromRecent';
+import StackedAvatars from '@components/stackedAvatars';
+import {processDialogElementForReaction} from '@components/popups/reactedList';
+import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
+import focusInput from '@helpers/dom/focusInput';
+import {wrapStoryMedia} from '@components/stories/preview';
+import {StoriesContextPeerState, useStories, StoriesProvider} from '@components/stories/store';
+import createUnifiedSignal from '@helpers/solid/createUnifiedSignal';
+import setBlankToAnchor from '@lib/richTextProcessor/setBlankToAnchor';
+import liteMode from '@helpers/liteMode';
+import Icon from '@components/icon';
+import {ChatReactionsMenu} from '@components/chat/reactionsMenu';
+import setCurrentTime from '@helpers/dom/setCurrentTime';
+import ReactionElement from '@components/chat/reaction';
+import blurActiveElement from '@helpers/dom/blurActiveElement';
+import apiManagerProxy from '@lib/apiManagerProxy';
+import reactionsEqual from '@appManagers/utils/reactions/reactionsEqual';
+import wrapSticker from '@components/wrappers/sticker';
+import createContextMenu from '@helpers/dom/createContextMenu';
+import isTargetAnInput from '@helpers/dom/isTargetAnInput';
+import {setQuizHint} from '@components/quizHint';
+import {doubleRaf} from '@helpers/schedulers';
 import {resolveFirst} from '@solid-primitives/refs';
-import {IS_MOBILE} from '../../environment/userAgent';
-import formatNumber from '../../helpers/number/formatNumber';
-import callbackify from '../../helpers/callbackify';
-import {dispatchHeavyAnimationEvent} from '../../hooks/useHeavyAnimationCheck';
-import deferredPromise, {CancellablePromise} from '../../helpers/cancellablePromise';
-import wrapReply from '../wrappers/reply';
-import getPeerId from '../../lib/appManagers/utils/peers/getPeerId';
-import appSidebarRight from '../sidebarRight';
-import AppStatisticsTab from '../sidebarRight/tabs/statistics';
-import getStoryRepostInfo from '../../lib/appManagers/utils/stories/repostInfo';
-import anchorCallback from '../../helpers/dom/anchorCallback';
-import {ButtonIconTsx} from '../buttonIconTsx';
-import {IconTsx} from '../iconTsx';
+import {IS_MOBILE} from '@environment/userAgent';
+import formatNumber from '@helpers/number/formatNumber';
+import callbackify from '@helpers/callbackify';
+import {dispatchHeavyAnimationEvent} from '@hooks/useHeavyAnimationCheck';
+import deferredPromise, {CancellablePromise} from '@helpers/cancellablePromise';
+import wrapReply from '@components/wrappers/reply';
+import getPeerId from '@appManagers/utils/peers/getPeerId';
+import appSidebarRight from '@components/sidebarRight';
+import AppStatisticsTab from '@components/sidebarRight/tabs/statistics';
+import getStoryRepostInfo from '@appManagers/utils/stories/repostInfo';
+import anchorCallback from '@helpers/dom/anchorCallback';
+import {ButtonIconTsx} from '@components/buttonIconTsx';
+import {IconTsx} from '@components/iconTsx';
 import {Transition} from 'solid-transition-group';
-import {TransitionGroup} from '../../helpers/solid/transitionGroup';
-import makeGoogleMapsUrl from '../../helpers/makeGoogleMapsUrl';
-import createMiddleware from '../../helpers/solid/createMiddleware';
-import showTooltip from '../tooltip';
-import safeWindowOpen from '../../helpers/dom/safeWindowOpen';
-import wrapUrl from '../../lib/richTextProcessor/wrapUrl';
-import PopupReportAd from '../popups/reportAd';
-import {useAppSettings} from '../../stores/appSettings';
-import PaidMessagesInterceptor, {PAYMENT_REJECTED} from '../chat/paidMessagesInterceptor';
+import {TransitionGroup} from '@helpers/solid/transitionGroup';
+import makeGoogleMapsUrl from '@helpers/makeGoogleMapsUrl';
+import {askOpenGoogleMaps} from '@components/confirmOpenGoogleMaps';
+import createMiddleware from '@helpers/solid/createMiddleware';
+import showTooltip from '@components/tooltip';
+import safeWindowOpen from '@helpers/dom/safeWindowOpen';
+import isVideoStalled from '@helpers/dom/isVideoStalled';
+import wrapUrl from '@lib/richTextProcessor/wrapUrl';
+import {showStoryReport} from '@components/popups/reportAd';
+import {useAppSettings} from '@stores/appSettings';
+import showStoriesStealthModePopup from '@components/popups/storiesStealthMode';
+import {showStorySettingsForStory} from '@components/popups/storySettings';
+import {useAppConfig} from '@stores/appState';
+import {wrapStoriesStealthModeDuration} from '@components/wrappers/wrapDuration';
+import {handleShareStory} from './share';
+import createListenerSetter from '@helpers/solid/createListenerSetter';
+import pillStyles from '@components/stories/storyPill.module.scss';
+import StoryWeatherArea, {toggleTemperatureUnit} from '@components/stories/weatherArea';
+import StoryMusicPanel, {STORY_MUSIC_PANEL_CLASS} from '@components/stories/musicPanel';
+import getAudioTitles from '@appManagers/utils/docs/getAudioTitles';
+import type {MyDocument} from '@appManagers/appDocsManager';
+import A11yButton from '@components/a11yButton';
 
 export const STORY_DURATION = 5e3;
 const STORY_HEADER_AVATAR_SIZE = 32;
@@ -119,30 +132,6 @@ rootScope.addEventListener('app_config', (appConfig) => {
 });
 
 const x = new OverlayClickHandler(undefined, true);
-
-const MessageInputField = (props: {}) => {
-  const inputField = new InputFieldAnimated({
-    placeholder: 'PreviewSender.CaptionPlaceholder',
-    name: 'message',
-    withLinebreaks: true
-  });
-
-  inputField.input.classList.replace('input-field-input', 'input-message-input');
-  inputField.inputFake.classList.replace('input-field-input', 'input-message-input');
-
-  return (
-    <div class="input-message-container">
-      {inputField.input}
-      {inputField.inputFake}
-    </div>
-  );
-};
-
-export function createListenerSetter() {
-  const listenerSetter = new ListenerSetter();
-  onCleanup(() => listenerSetter.removeAll());
-  return listenerSetter;
-}
 
 const StorySlides = (props: {
   state: StoriesContextPeerState,
@@ -319,9 +308,10 @@ const StoryInput = (props: {
     <ButtonIconTsx
       ref={btnReactionEl}
       onClick={onReactionClick}
-      tabIndex={-1}
       class="btn-circle btn-reaction chat-input-secondary-button chat-secondary-button"
       noRipple={true}
+      aria-label={I18n.format('Reactions', true)}
+      aria-pressed={!!(props.currentStory() as StoryItem.storyItem)?.sent_reaction}
     >
       {props.reaction()}
     </ButtonIconTsx>
@@ -392,7 +382,7 @@ const StoryInput = (props: {
         if(focused) {
           playAfterFocus = untrack(() => !stories.paused);
           // document.addEventListener('mousedown', onMouseDown, {capture: true, once: true});
-          document.addEventListener('click', onClick, {capture: true});
+          getAppWindow().document.addEventListener('click', onClick, {capture: true});
           appNavigationController.pushItem(navigationItem = {
             type: 'stories-focus',
             onPop: () => {
@@ -401,7 +391,7 @@ const StoryInput = (props: {
           });
         } else {
           // document.removeEventListener('mousedown', onMouseDown, {capture: true});
-          document.removeEventListener('click', onClick, {capture: true});
+          getAppWindow().document.removeEventListener('click', onClick, {capture: true});
           appNavigationController.removeItem(navigationItem);
           navigationItem = undefined;
         }
@@ -505,6 +495,12 @@ const StoryInput = (props: {
         input.setReplyTo({
           replyToStoryId: props.currentStory().id
         });
+      });
+
+      createEffect(async() => {
+        JSON.stringify(stories.stealthMode); // * track every key change
+        chat.stealthMode = stories.stealthMode;
+        input.updateMessageInputPlaceholder(await input.getPlaceholderParams());
       });
     });
   });
@@ -634,6 +630,7 @@ const StoryMediaArea = (props: {
   const isReaction = createMemo(() => props.mediaArea._ === 'mediaAreaSuggestedReaction');
   const isPost = createMemo(() => props.mediaArea._ === 'mediaAreaChannelPost');
   const isLink = createMemo(() => props.mediaArea._ === 'mediaAreaUrl');
+  const isWeather = createMemo(() => props.mediaArea._ === 'mediaAreaWeather');
 
   const onLocationClick = async() => {
     const geoPoint = (props.mediaArea as MediaArea.mediaAreaGeoPoint).geo as GeoPoint.geoPoint;
@@ -647,14 +644,7 @@ const StoryMediaArea = (props: {
 
       hasPopup = true;
       cancelEvent(e);
-      try {
-        await confirmationPopup({
-          descriptionLangKey: 'Popup.OpenInGoogleMaps',
-          button: {
-            langKey: 'Open'
-          }
-        });
-      } catch(err) {
+      if(!await askOpenGoogleMaps()) {
         if(wasPlaying) {
           actions.play();
         }
@@ -863,9 +853,29 @@ const StoryMediaArea = (props: {
   } else if(isLink()) {
     onTypeClick = onLinkClick;
     props.setReady(true);
+  } else if(isWeather()) {
+    onTypeClick = toggleTemperatureUnit;
+    setChildren(
+      <StoryWeatherArea
+        mediaArea={props.mediaArea as MediaArea.mediaAreaWeather}
+        width={w}
+        height={h}
+        storyHeight={stories.height}
+      />
+    );
+    props.setReady(true);
   } else {
     props.setReady(true);
   }
+
+  // accessible name for the interactive overlay (only when the area has an action)
+  const interactiveLabel = createMemo<LangPackKey>(() => {
+    if(isReaction()) return 'Reactions';
+    if(isLocation()) return 'StoryViewLocation';
+    if(isPost()) return 'Story.ViewPost';
+    if(isLink()) return 'OpenUrlTitle';
+    return undefined;
+  });
 
   let div: HTMLDivElement;
   return (
@@ -880,10 +890,15 @@ const StoryMediaArea = (props: {
         ] : []),
         ...(isReaction() ? [
           styles.ViewerStoryMediaAreaReaction
-        ] : [])
+        ] : []),
+        isWeather() && styles.ViewerStoryMediaAreaWeather
       )}
       style={`left: ${x}%; top: ${y}%; width: ${w}%; height: ${h}%; --rotate: ${rotation}deg`}
       onClick={onClick}
+      role={interactiveLabel() ? 'button' : undefined}
+      tabindex={Modes.a11y && interactiveLabel() ? 0 : undefined}
+      onKeyDown={interactiveLabel() ? buttonKeyDown : undefined}
+      aria-label={interactiveLabel() ? I18n.format(interactiveLabel(), true) : undefined}
     >
       {children()}
     </div>
@@ -928,44 +943,61 @@ const Stories = (props: {
 
   peerTitleElement.classList.add(styles.ViewerStoryHeaderName);
 
-  const bindOnAnyPopupClose = (wasPlaying = !stories.paused) => () => onAnyPopupClose(wasPlaying);
+  // * `wasPlaying` is resolved in the body, not as a parameter default: the production
+  // * minifier binds a closure variable read from a parameter default to the wrong symbol
+  const wasPlayingOr = (wasPlaying?: boolean) => wasPlaying ?? !stories.paused;
+  const bindOnAnyPopupClose = (wasPlaying?: boolean) => {
+    const _wasPlaying = wasPlayingOr(wasPlaying);
+    return () => onAnyPopupClose(_wasPlaying);
+  };
   const onAnyPopupClose = (wasPlaying: boolean) => {
     if(wasPlaying) {
       actions.play();
     }
   };
 
-  const onShareClick = (wasPlaying = !stories.paused) => {
+  const settingsMiddleware = createMiddleware().get();
+  let openingSettings = false;
+  const openStorySettings = async(previouslyPlaying?: boolean) => {
+    const story = currentStory();
+    if(story?._ !== 'storyItem' || openingSettings) return;
+    openingSettings = true;
+    const storyId = story.id;
+    const resume = wasPlayingOr(previouslyPlaying);
+    const isRelevant = () => settingsMiddleware() && isActive() && currentStory()?.id === storyId;
+    const onClose = () => {
+      openingSettings = false;
+      if(isRelevant()) onAnyPopupClose(resume);
+    };
     actions.pause();
-    const popup = PopupPickUser.createSharingPicker({
-      onSelect: async(peerId) => {
-        const storyPeerId = props.state.peerId;
+    try {
+      if(!await rootScope.managers.appStoriesManager.canEditStorySettings(props.state.peerId, storyId)) {
+        onClose();
+        return;
+      }
+      await showStorySettingsForStory({peerId: props.state.peerId, storyId, onClose, isRelevant});
+    } catch{
+      if(isRelevant()) toastNew({langPackKey: 'StorySettingsLoadError'});
+      onClose();
+    }
+  };
 
-        const preparedPaymentResult = await PaidMessagesInterceptor.prepareStarsForPayment({messageCount: 1, peerId});
-        if(preparedPaymentResult === PAYMENT_REJECTED) throw new Error();
-
-        const inputPeer = await rootScope.managers.appPeersManager.getInputPeerById(storyPeerId);
-        rootScope.managers.appMessagesManager.sendOther({
-          peerId,
-          inputMedia: {
-            _: 'inputMediaStory',
-            id: currentStory().id,
-            peer: inputPeer
-          },
-          confirmedPaymentResult: preparedPaymentResult
-        });
-
+  const onShareClick = (_wasPlaying?: boolean) => {
+    const wasPlaying = wasPlayingOr(_wasPlaying);
+    actions.pause();
+    handleShareStory({
+      story: currentStory(),
+      peerId: props.state.peerId,
+      onSend: async(toPeerId: PeerId) => {
         showMessageSentTooltip(
           i18n(
-            peerId === rootScope.myId ? 'StorySharedToSavedMessages' : 'StorySharedTo',
-            [await wrapPeerTitle({peerId})]
+            toPeerId === rootScope.myId ? 'StorySharedToSavedMessages' : 'StorySharedTo',
+            [await wrapPeerTitle({peerId: toPeerId})]
           )
-        );
+        )
       },
-      chatRightsActions: ['send_media']
-    });
-
-    popup.addEventListener('closeAfterTimeout', bindOnAnyPopupClose(wasPlaying));
+      onClose: bindOnAnyPopupClose(wasPlaying)
+    })
   };
 
   const onShareButtonClick = (e: MouseEvent, listenTo: HTMLElement) => {
@@ -1030,6 +1062,9 @@ const Stories = (props: {
   const [noSound, setNoSound] = createSignal(false);
   const [sliding, setSliding] = props.transitionSignal;
   const [privacyType, setPrivacyType] = createSignal<StoryPrivacyType>();
+  // The story's own track, shown as a pill under the caption — set from setStoryMeta so it changes
+  // with the rest of the story's chrome, not the moment the index moves.
+  const [music, setMusic] = createSignal<MyDocument>();
   const [mediaAreas, setMediaAreas] = createSignal<JSX.Element>();
   const [stackedAvatars, setStackedAvatars] = createSignal<StackedAvatars>();
   const [tooltipCloseCallback, setTooltipCloseCallback] = createSignal<VoidFunction>();
@@ -1191,10 +1226,7 @@ const Stories = (props: {
     };
 
     const onWaiting = () => {
-      const loading = video.networkState === video.NETWORK_LOADING;
-      const isntEnoughData = video.readyState < video.HAVE_FUTURE_DATA;
-
-      if(loading && isntEnoughData) {
+      if(isVideoStalled(video)) {
         setLoading(true);
         if(isActive()) {
           actions.setBuffering(true);
@@ -1259,32 +1291,28 @@ const Stories = (props: {
       }
     });
 
-    if(!untrack(noSound)) apiManagerProxy.getState().then((state) => {
+    if(!untrack(noSound)) {
       const [appSettings, setAppSettings] = useAppSettings();
       if(!cleaned && !appSettings.seenTooltips.storySound) {
-        runWithOwner(owner, () => {
-          const playingMemo = createMemo((prev) => prev || (isActive() && stories.startTime));
-          createEffect(() => {
-            if(playingMemo()) {
-              const {close} = showTooltip({
-                ...muteTooltipOptions,
-                textElement: i18n('Story.SoundTooltip')
-              });
-              setTooltipCloseCallback(() => close);
-            }
-          });
+        const playingMemo = createMemo((prev) => prev || (isActive() && stories.startTime));
+        createEffect(() => {
+          if(playingMemo()) {
+            const {close} = showTooltip({
+              ...muteTooltipOptions,
+              textElement: i18n('Story.SoundTooltip')
+            });
+            setTooltipCloseCallback(() => close);
+          }
         });
 
         setAppSettings('seenTooltips', 'storySound', true);
       }
-    });
-
-    const owner = getOwner();
+    }
   };
 
   const setStoryMeta = (story: StoryItem.storyItemSkipped | StoryItem.storyItem) => {
     let privacyType = getStoryPrivacyType(story as StoryItem.storyItem);
-    if(/* !isMe &&  */privacyType === 'public') {
+    if(!isMe && privacyType === 'public') {
       privacyType = undefined;
     }
 
@@ -1298,7 +1326,12 @@ const Stories = (props: {
     const isPublic = !!(story as StoryItem.storyItem).pFlags.public;
     const peer = apiManagerProxy.getPeer(props.state.peerId);
     const usernames = getPeerActiveUsernames(peer);
+    // only a track that can be named gets a pill — a nameless document would render an empty one.
+    // `unwrap` like the media above: the panel hands this document to a manager, and a Solid store
+    // proxy cannot be structure-cloned across the worker port
+    const musicDoc = unwrap((story as StoryItem.storyItem).music) as MyDocument;
 
+    setMusic(musicDoc && getAudioTitles(musicDoc) ? musicDoc : undefined);
     setPrivacyType(privacyType);
     setDate({timestamp: date, edited});
     setNoSound(noSound);
@@ -1617,7 +1650,7 @@ const Stories = (props: {
 
           if(fwdFromName || mediaAreaChannelPost) {
             const container = document.createElement('div');
-            container.classList.add(styles.ViewerStoryRepostSmall);
+            container.classList.add(pillStyles.Pill);
             container.append(title);
             return container;
           }
@@ -1643,7 +1676,7 @@ const Stories = (props: {
       reply.classList.add(styles.ViewerStoryRepost);
       ret.reply = reply;
       setHeaderContent([
-        Icon(STORY_REPOST_ICON, styles.ViewerStoryHeaderRepostIcon),
+        Icon(STORY_REPOST_ICON),
         headerAvatar,
         headerPeerTitle
       ]);
@@ -1780,13 +1813,14 @@ const Stories = (props: {
 
     const storyWidth = stories.width;
     const MARGIN = 40;
-    const multiplier = diff > 0 ? 1 : -1;
+    // * the sets further on in the list stand at the inline end: on the left in RTL
+    const multiplier = (diff > 0 ? 1 : -1) * (I18n.isRTL() ? -1 : 1);
     const smallStoryWidth = storyWidth * STORY_SCALE_SMALL;
     let offset = storyWidth * multiplier;
     const distance = (storyWidth - smallStoryWidth) / 2 - MARGIN;
     offset = (storyWidth - distance) * multiplier;
     if(Math.abs(diff) !== 1) {
-      const d = diff - 1 * multiplier;
+      const d = (Math.abs(diff) - 1) * multiplier;
       offset += d * smallStoryWidth + MARGIN * d;
     }
     return offset + 'px';
@@ -1846,8 +1880,10 @@ const Stories = (props: {
     <ButtonIconTsx
       ref={muteButtonButton}
       classList={{[styles.noSound]: noSound()}}
-      icon={stories.muted || noSound() ? 'speakerofffilled' : 'speakerfilled'}
+      icon={stories.muted || noSound() ? 'speakeroff_filled' : 'speaker_filled'}
       onClick={toggleMute}
+      aria-label={I18n.format(stories.muted || noSound() ? 'VoipUnmute' : 'Call.Mute', true)}
+      aria-pressed={!!(stories.muted || noSound())}
     />
   );
 
@@ -1924,6 +1960,7 @@ const Stories = (props: {
   const scrollPath = (path: number) => {
     const target = Math.max(0, path);
     const startTime = Date.now();
+    const duration = liteMode.isAvailable('motion') ? 300 : 0;
     scrolling = true;
 
     const story = currentStory();
@@ -1932,7 +1969,7 @@ const Stories = (props: {
         return false;
       }
 
-      const t = Math.min(1, (Date.now() - startTime) / 300);
+      const t = duration ? Math.min(1, (Date.now() - startTime) / duration) : 1;
       const value = easeOutCubicApply(t, 1);
       const currentPath = path * (1 - value);
       const scrollTop = Math.round(target - currentPath);
@@ -1960,12 +1997,16 @@ const Stories = (props: {
   const captionContainer = (
     <div
       ref={captionScrollable}
+      tabindex={Modes.a11y ? 0 : undefined}
+      role="region"
+      aria-label={I18n.format('AccDescr.StoryCaption', true)}
       class={classNames(
         'scrollable',
         'scrollable-y',
         'no-scrollbar',
         styles.ViewerStoryCaption,
-        repost() && caption() && styles.hasReply
+        repost() && caption() && styles.hasReply,
+        music() && styles.hasMusic
       )}
       onScroll={onCaptionScroll}
     >
@@ -1987,6 +2028,8 @@ const Stories = (props: {
   const contentItem = (
     <div
       class={styles.ViewerStoryContentItem}
+      role="img"
+      aria-label={I18n.format(videoDuration() ? 'AttachVideo' : 'AttachPhoto', true)}
       style={captionOpacity() && {opacity: 1 - captionOpacity() * 0.5}}
     >
       {content()}
@@ -2140,6 +2183,14 @@ const Stories = (props: {
     ignoreOnClose = false;
   const btnMenu = ButtonMenuToggle({
     buttons: [{
+      icon: 'settings',
+      text: 'StorySettings',
+      onClick: () => {
+        ignoreOnClose = true;
+        void openStorySettings(wasPlaying);
+      },
+      verify: () => story?._ === 'storyItem' && rootScope.managers.appStoriesManager.canEditStorySettings(peerId, story.id)
+    }, {
       icon: 'plusround',
       text: 'Story.AddToProfile',
       onClick: () => togglePinned(true),
@@ -2201,6 +2252,30 @@ const Stories = (props: {
         return !!(story?._ === 'storyItem' && !story.pFlags.noforwards && rootScope.premium);
       }
     }, {
+      icon: 'eyecross',
+      text: 'Stories.StealthMode.View',
+      onClick: () => {
+        ignoreOnClose = true;
+        const appConfig = useAppConfig();
+        const onAnyPopupClose = bindOnAnyPopupClose(wasPlaying);
+        showStoriesStealthModePopup({
+          onActivate: () => {
+            setQuizHint({
+              title: i18n('Stories.StealthMode.Activated.Title'),
+              textElement: i18n('Stories.StealthMode.Activated.Subtitle', [
+                wrapStoriesStealthModeDuration(appConfig.stories_stealth_future_period),
+                wrapStoriesStealthModeDuration(appConfig.stories_stealth_past_period)
+              ]),
+              appendTo: storyDiv,
+              from: 'bottom',
+              duration: 8000,
+              icon: 'checkround_filled'
+            });
+          },
+          onClose: onAnyPopupClose
+        });
+      }
+    }, {
       icon: 'archive',
       text: 'ArchivePeerStories',
       onClick: () => togglePeerHidden(true),
@@ -2211,7 +2286,13 @@ const Stories = (props: {
       onClick: () => togglePeerHidden(false),
       verify: () => isPeerArchived(false)
     }, {
-      icon: 'statistics',
+      icon: 'delete',
+      text: 'StoriesRemoveFromRecent',
+      onClick: () => removeStoriesFromRecent(props.state.peerId),
+      verify: async() => props.state.peerId !== rootScope.myId &&
+        await rootScope.managers.appStoriesManager.getPeerStoriesRemoval(props.state.peerId) === 'remove'
+    }, {
+      icon: 'statistics_filled',
       text: 'ViewStatistics',
       onClick: () => {
         const storyId = currentStory().id;
@@ -2255,7 +2336,7 @@ const Stories = (props: {
       onClick: () => {
         ignoreOnClose = true;
         const onAnyPopupClose = bindOnAnyPopupClose(wasPlaying);
-        PopupReportAd.createStoryReport(props.state.peerId, [currentStory().id], onAnyPopupClose);
+        showStoryReport(props.state.peerId, [currentStory().id], onAnyPopupClose);
       },
       verify: () => !(story as StoryItem.storyItem).pFlags?.out && props.state.peerId !== CHANGELOG_PEER_ID
       // separator: true
@@ -2264,6 +2345,7 @@ const Stories = (props: {
     ...topMenuOptions
   });
   btnMenu.classList.add('night');
+  btnMenu.setAttribute('aria-label', I18n.format('MultiAccount.More', true));
 
   // * top menu end
 
@@ -2277,6 +2359,10 @@ const Stories = (props: {
   };
 
   const onPrivacyIconClick = async() => {
+    if(isMe) {
+      await openStorySettings();
+      return;
+    }
     const type = privacyType();
     const peerTitle = await wrapPeerTitle({peerId: props.state.peerId, onlyFirstName: true});
     const {close} = showTooltip({
@@ -2313,9 +2399,9 @@ const Stories = (props: {
     );
   });
 
-  let privacyIconElement: HTMLDivElement;
+  let privacyIconElement: HTMLButtonElement;
   const privacyIcon = (
-    <div
+    <A11yButton
       ref={privacyIconElement}
       class={classNames(
         styles.ViewerStoryPrivacy,
@@ -2323,9 +2409,10 @@ const Stories = (props: {
         `privacy-bg-${privacyType()}`
       )}
       onClick={() => onPrivacyIconClick()}
+      aria-label={I18n.format('PrivacyTitle', true)}
     >
       {Icon(privacyIconMap[privacyType()])}
-    </div>
+    </A11yButton>
   );
 
   // * privacy icon end
@@ -2354,51 +2441,49 @@ const Stories = (props: {
   const openViewsList = isMe && (() => {
     let nextOffset: string;
     const viewsMap: Map<PeerId, StoryView.storyView> = new Map();
-    const popup: PopupPickUser = PopupElement.createPopup(
-      PopupPickUser,
-      {
-        peerType: ['custom'],
-        getMoreCustom: (q) => {
-          const loadCount = 50;
-          return rootScope.managers.appStoriesManager.getStoryViewsList(
-            props.state.peerId,
-            currentStory().id,
-            loadCount,
-            nextOffset,
-            q
-          ).then(({nextOffset: _nextOffset, views}) => {
-            nextOffset = _nextOffset;
-            return {
-              result: views.map((storyView) => {
-                const peerId = storyView.user_id.toPeerId(false);
-                viewsMap.set(peerId, storyView);
-                return peerId;
-              }),
-              isEnd: !nextOffset
-            };
-          });
-        },
-        processElementAfter: (peerId, dialogElement) => {
-          const view = viewsMap.get(peerId);
-          return processDialogElementForReaction({
-            dialogElement,
-            peerId,
-            date: view.date,
-            isMine: true,
-            middleware: popup.selector.middlewareHelperLoader.get(),
-            reaction: view.reaction
-          });
-        },
-        onSelect: (peerId) => {
-          props.close(() => {
-            appImManager.setInnerPeer({peerId});
-          });
-        },
-        placeholder: 'SearchPlaceholder',
-        exceptSelf: true,
-        meAsSaved: false
-      }
-    );
+    const popup = showPickUserPopup({
+      titleLangKey: 'StoryViewers',
+      peerType: ['custom'],
+      getMoreCustom: (q) => {
+        const loadCount = 50;
+        return rootScope.managers.appStoriesManager.getStoryViewsList(
+          props.state.peerId,
+          currentStory().id,
+          loadCount,
+          nextOffset,
+          q
+        ).then(({nextOffset: _nextOffset, views}) => {
+          nextOffset = _nextOffset;
+          return {
+            result: views.map((storyView) => {
+              const peerId = storyView.user_id.toPeerId(false);
+              viewsMap.set(peerId, storyView);
+              return peerId;
+            }),
+            isEnd: !nextOffset
+          };
+        });
+      },
+      processElementAfter: (peerId, dialogElement) => {
+        const view = viewsMap.get(peerId);
+        return processDialogElementForReaction({
+          dialogElement,
+          peerId,
+          date: view.date,
+          isMine: true,
+          middleware: dialogElement.middlewareHelper.get(),
+          reaction: view.reaction
+        });
+      },
+      onSelect: ([obj]) => {
+        props.close(() => {
+          appImManager.setInnerPeer(obj);
+        });
+      },
+      placeholder: 'SearchPlaceholder',
+      exceptSelf: true,
+      meAsSaved: false
+    });
   });
 
   const onDeleteClick = isMe && (async() => {
@@ -2460,7 +2545,7 @@ const Stories = (props: {
     });
   }
 
-  let footerReactionElement: HTMLSpanElement;
+  let footerReactionElement: HTMLButtonElement;
   const footer = (isMe || CHANGELOG_PEER_ID === props.state.peerId || !props.state.peerId.isUser()) && (
     <div
       class={classNames(
@@ -2472,10 +2557,10 @@ const Stories = (props: {
     >
       {isMe ? (
         <>
-          <div class={styles.ViewerStoryFooterLeft} onClick={openViewsList}>
+          <A11yButton class={styles.ViewerStoryFooterLeft} onClick={openViewsList}>
             {stackedAvatars() && stackedAvatars().container}
             {getViews()}
-          </div>
+          </A11yButton>
           <div class={styles.ViewerStoryFooterRight}>
             <ButtonIconTsx icon="delete" onClick={onDeleteClick} />
           </div>
@@ -2484,7 +2569,7 @@ const Stories = (props: {
         <>
           <div class={styles.ViewerStoryFooterLeft}>
             <span class={styles.ViewerStoryFooterIcon}>
-              {Icon('eye1', styles.ViewerStoryFooterIconIcon)}
+              {Icon('eye1_filled', styles.ViewerStoryFooterIconIcon)}
               {formatNumber((currentStory() as StoryItem.storyItem).views?.views_count || 1, 1)}
             </span>
           </div>
@@ -2497,18 +2582,21 @@ const Stories = (props: {
                 }}
               />
             )}
-            <span
+            <A11yButton
+              as="span"
+              aria-label={I18n.format('Reactions', true)}
+              aria-pressed={!!(currentStory() as StoryItem.storyItem).sent_reaction}
               ref={footerReactionElement}
               class={classNames(
                 styles.ViewerStoryFooterIcon,
                 styles.ViewerStoryFooterReaction,
                 (currentStory() as StoryItem.storyItem).sent_reaction && styles.isReacted
               )}
-              onClick={(e) => sendReaction({reaction: {_: 'reactionEmoji', emoticon: DEFAULT_REACTION_EMOTICON}, target: footerReactionElement.firstElementChild as HTMLElement})}
+              onClick={() => sendReaction({reaction: {_: 'reactionEmoji', emoticon: DEFAULT_REACTION_EMOTICON}, target: footerReactionElement.firstElementChild as HTMLElement})}
             >
               <IconTsx icon={(currentStory() as StoryItem.storyItem).sent_reaction ? 'reactions_filled' : 'reactions'} class={styles.ViewerStoryFooterIconIcon}></IconTsx>
               {(currentStory() as StoryItem.storyItem).views?.reactions_count || 0}
-            </span>
+            </A11yButton>
           </div>
         </>
       ) : i18n('StoryCantReply'))}
@@ -2521,7 +2609,7 @@ const Stories = (props: {
     on(
       () => [isActive(), currentStory()],
       () => {
-        if(liteMode.isAvailable('animations')) {
+        if(liteMode.isAvailable('motion')) {
           return;
         }
 
@@ -2542,7 +2630,12 @@ const Stories = (props: {
   //   }
   // });
 
-  const onProfileClick = () => {
+  const onProfileClick = (e: MouseEvent) => {
+    // * I'm handling it elsewhere
+    if(findUpClassName(e.target, styles.ViewerStoryHeaderRepost)) {
+      return;
+    }
+
     const peerId = props.state.peerId;
     props.close(() => {
       appImManager.setInnerPeer({peerId});
@@ -2553,12 +2646,13 @@ const Stories = (props: {
     return props.index() - props.peers.indexOf(stories.peer);
   });
 
+  // * a set further on in the list turns in from the inline end: from the left in RTL
   const fromLeft = createMemo<boolean>((prev) => {
-    return sliding() ? prev : diffToActive() < 0;
+    return sliding() ? prev : (I18n.isRTL() ? diffToActive() > 0 : diffToActive() < 0);
   });
 
   const fromRight = createMemo<boolean>((prev) => {
-    return sliding() ? prev : diffToActive() > 0;
+    return sliding() ? prev : (I18n.isRTL() ? diffToActive() < 0 : diffToActive() > 0);
   });
 
   const [fadeIn, setFadeIn] = createSignal(false);
@@ -2606,6 +2700,10 @@ const Stories = (props: {
     <div
       ref={div}
       class={styles.ViewerStoryContainer}
+      role={!isActive() ? 'button' : undefined}
+      tabindex={Modes.a11y && !isActive() ? 0 : undefined}
+      aria-label={!isActive() ? I18n.format('OpenStory', true) : undefined}
+      onKeyDown={!isActive() ? buttonKeyDown : undefined}
       classList={{
         ...(props.isFull() ? {
           [styles.fromLeft]: fromLeft(),
@@ -2624,7 +2722,10 @@ const Stories = (props: {
       onClick={(e) => {
         if(!isActive()) {
           actions.set({peer: props.state, index: props.state.index});
-        } else if(findUpClassName(e.target, styles.ViewerStoryRepost)) {
+        } else if(
+          findUpClassName(e.target, styles.ViewerStoryRepost) ||
+          findUpClassName(e.target, styles.ViewerStoryHeaderRepost)
+        ) {
           const story = currentStory();
           const repostInfo = getStoryRepostInfo(story as StoryItem.storyItem);
           if(!repostInfo) {
@@ -2634,11 +2735,12 @@ const Stories = (props: {
             return;
           }
 
-          const {fwdFrom, mediaAreaChannelPost} = repostInfo
+          const {fwdFrom, mediaAreaChannelPost} = repostInfo;
           if(fwdFrom?.from || mediaAreaChannelPost) {
+            e.stopPropagation();
             props.close(() => {
               const peerId = fwdFrom ? getPeerId(fwdFrom.from) : mediaAreaChannelPost.channel_id.toPeerId(true);
-              if(fwdFrom?.story_id) {
+              if(fwdFrom?.story_id && !findUpClassName(e.target, styles.ViewerStoryHeaderRepost)) {
                 createStoriesViewerWithPeer({
                   peerId,
                   id: fwdFrom.story_id
@@ -2667,7 +2769,9 @@ const Stories = (props: {
           findUpClassName(e.target, styles.ViewerStory)
         ) {
           const rect = div.getBoundingClientRect();
-          const next = e.clientX > (rect.left + rect.width / 3);
+          // * the first third from the inline start goes back: the right one in RTL
+          const x = I18n.getIsRTL() ? rect.right - e.clientX : e.clientX - rect.left;
+          const next = x > rect.width / 3;
           actions.goToNearestStorySafe(next);
         }
       }}
@@ -2679,12 +2783,12 @@ const Stories = (props: {
           {contentItem}
         </div>
         <div class={styles.hideOnSmall}>
-          <div class={classNames(styles.ViewerStoryShadow, caption() && styles.hasCaption)}></div>
+          <div class={classNames(styles.ViewerStoryShadow, (caption() || music()) && styles.hasCaption)}></div>
           <div class={styles.ViewerStorySlides}>
             {slides}
           </div>
           <div ref={headerDiv} class={classNames(styles.ViewerStoryHeader, 'night')}>
-            <div class={styles.ViewerStoryHeaderLeft} onClick={onProfileClick}>
+            <A11yButton class={styles.ViewerStoryHeaderLeft} onClick={onProfileClick}>
               {avatar.element}
               <div class={styles.ViewerStoryHeaderInfo}>
                 <div class={styles.ViewerStoryHeaderRow}>
@@ -2705,12 +2809,13 @@ const Stories = (props: {
                   {getDateText()}
                 </div>
               </div>
-            </div>
+            </A11yButton>
             <div class={styles.ViewerStoryHeaderRight}>
               {privacyType() && privacyIcon}
               <ButtonIconTsx
-                icon={stories.paused && !stories.playAfterGesture ? 'play' : 'pause'}
+                icon={stories.paused && !stories.playAfterGesture ? 'play_filled' : 'pause_filled'}
                 onClick={() => actions.toggle()}
+                aria-label={I18n.format(stories.paused && !stories.playAfterGesture ? 'Play' : 'Pause', true)}
               />
               {videoDuration() && muteButton}
               {/* <ButtonIconTsx icon={'more'} /> */}
@@ -2719,21 +2824,31 @@ const Stories = (props: {
                 <ButtonIconTsx
                   icon={'close'}
                   onClick={() => props.close()}
+                  aria-label={I18n.format('Close', true)}
                 />
               )}
             </div>
           </div>
           {(caption() || repost()) && captionContainer}
-          {mediaAreas() && (
-            <div
-              class={styles.ViewerStoryMediaAreas}
-              style={captionOpacity() && {'opacity': 1 - captionOpacity() * 0.5, 'z-index': 0}}
-            >
-              {mediaAreas()}
-            </div>
-          )}
+          {/* outside the caption's scroller so a long caption can't push it out of sight; the
+            caption reserves the room for it instead. keyed: the panel binds its menu to one
+            element, so a different track has to rebuild it */}
+          <Show keyed when={music()}>
+            {(doc) => <StoryMusicPanel doc={doc} menuOptions={topMenuOptions} />}
+          </Show>
           {reactionsMenu()?.widthContainer}
         </div>
+        {/* Media areas are part of the story, not of the interface drawn over it — holding to
+          pause fades the interface away and has to leave them where they are (iOS keeps them in
+          the content view for the same reason), so they live outside `hideOnSmall`. */}
+        {mediaAreas() && (
+          <div
+            class={styles.ViewerStoryMediaAreas}
+            style={captionOpacity() && {'opacity': 1 - captionOpacity() * 0.5, 'z-index': 0}}
+          >
+            {mediaAreas()}
+          </div>
+        )}
         {!props.isFull() && (
           <div class={styles.ViewerStoryInfo}>
             {avatarInfo.node}
@@ -2760,21 +2875,6 @@ const Stories = (props: {
   );
 }
 
-export type PassthroughProps<E extends Element> = {element: E} & ParentProps & JSX.HTMLAttributes<E>;
-export function Passthrough<E extends Element>(props: PassthroughProps<E>): E {
-  const owner = getOwner();
-  let content: JSX.Element;
-
-  createEffect(() => {
-    content ||= runWithOwner(owner, () => props.children);
-    const [_, others] = splitProps(props, ['element']);
-    const isSvg = props.element instanceof SVGElement;
-    assign(props.element, others, isSvg);
-  });
-
-  return props.element;
-}
-
 export default function StoriesViewer(props: {
   onExit?: () => void,
   target?: Accessor<Element>,
@@ -2783,6 +2883,8 @@ export default function StoriesViewer(props: {
 }) {
   const [stories, actions] = useStories();
   const [show, setShow] = createSignal(false);
+  const previouslyFocused = getOverlayRoot().ownerDocument.activeElement as HTMLElement;
+  let focusTrap: FocusTrap;
   const isFull = createMemo(() => {
     return windowSize.height > windowSize.width ||
       windowSize.width < (stories.width + 135 + 8 * 2) ||
@@ -2801,7 +2903,8 @@ export default function StoriesViewer(props: {
   ]);
 
   const onKeyDown = (e: KeyboardEvent) => {
-    if(isTargetAnInput(document.activeElement as HTMLElement)) {
+    if(Modes.a11y && shouldPreserveKeyboardFocus(e)) return;
+    if(isTargetAnInput(getAppWindow().document.activeElement as HTMLElement)) {
       throttledKeyDown.clear();
       return;
     }
@@ -2837,20 +2940,26 @@ export default function StoriesViewer(props: {
   };
 
   const throttledKeyDown = throttle((e: KeyboardEvent) => {
-    if(e.key === 'ArrowRight') {
+    const inlineKeys = getInlineArrowKeys();
+    if(e.key === inlineKeys.next) {
       actions.goToNearestStorySafe(true);
-    } else if(e.key === 'ArrowLeft') {
+    } else if(e.key === inlineKeys.previous) {
       actions.goToNearestStorySafe(false);
     } else if(e.code === 'Space') {
       actions.toggle();
     }
   }, 200, true);
 
+  // Follow the active window so the stories keyboard handler keeps firing when the overlay
+  // moves into a Document PiP window.
+  let disposeKeyDownListener: () => void;
+
   emoticonsDropdown.getElement().classList.add('night');
   emoticonsDropdown.setTextColor('white');
 
   onCleanup(() => {
-    document.body.removeEventListener('keydown', onKeyDown);
+    disposeKeyDownListener?.();
+    focusTrap?.deactivate();
     toggleOverlay(false);
     swipeHandler.removeListeners();
     appNavigationController.removeItem(navigationItem);
@@ -2968,12 +3077,15 @@ export default function StoriesViewer(props: {
     const preserve = STORIES_PRESERVE + STORIES_PRESERVE_HIDDEN;
     const getItemsToRender = (index: number) => stories.peers.slice(Math.max(index - preserve, 0), Math.min(index + preserve + 1, stories.peers.length));
     const itemsToRender = createMemo(() => getItemsToRender(stories.index));
-    const btnClose = <ButtonIconTsx ref={closeButton} icon={'close'} class={styles.ViewerClose} onClick={() => close()} />;
+    const btnClose = <ButtonIconTsx ref={closeButton} icon={'close'} class={styles.ViewerClose} onClick={() => close()} aria-label={I18n.format('Close', true)} />;
     const transitions: WeakMap<Element, Accessor<boolean>> = new WeakMap();
 
     return (
       <div
         ref={div}
+        role="dialog"
+        aria-modal="true"
+        aria-label={I18n.format('Stories', true)}
         class={classNames(
           styles.Viewer,
           !show() && styles.isInvisible,
@@ -3001,6 +3113,14 @@ export default function StoriesViewer(props: {
         <TransitionGroup noWait={() => isFull()/*  || !stories.hasViewer */} transitions={transitions}>
           <For each={itemsToRender()}>{createStories}</For>
         </TransitionGroup>
+        {Modes.a11y && <>
+          <button type="button" class="sr-only sr-only-focusable" onClick={() => actions.goToNearestStorySafe(false)}>
+            {i18n('KeyboardShortcuts.Action.PreviousStory')}
+          </button>
+          <button type="button" class="sr-only sr-only-focusable" onClick={() => actions.goToNearestStorySafe(true)}>
+            {i18n('KeyboardShortcuts.Action.NextStory')}
+          </button>
+        </>}
       </div>
     );
   });
@@ -3025,7 +3145,8 @@ export default function StoriesViewer(props: {
       }
 
       const peerIndex = stories.peers.indexOf(stories.peer);
-      const neighbourIndex = peerIndex + (xDiff < 0 ? 1 : -1);
+      // * a swipe toward the inline start brings the next set: to the right in RTL
+      const neighbourIndex = peerIndex + ((xDiff < 0) !== I18n.getIsRTL() ? 1 : -1);
       const neighbour = stories.peers[neighbourIndex];
       if(!neighbour) {
         close();
@@ -3042,6 +3163,7 @@ export default function StoriesViewer(props: {
         !findUpClassName(e.target, styles.ViewerStoryMediaArea) &&
         !findUpClassName(e.target, styles.ViewerStoryPrivacy) &&
         !findUpClassName(e.target, styles.ViewerStoryCaptionText) &&
+        !findUpClassName(e.target, STORY_MUSIC_PANEL_CLASS) &&
         !findUpClassName(e.target, styles.ViewerStoryReactions) &&
         !!findUpClassName(e.target, styles.ViewerStory) &&
         !findUpClassName(e.target, styles.small) &&
@@ -3074,7 +3196,7 @@ export default function StoriesViewer(props: {
       }
 
       if(story && stories.hideInterface) {
-        document.addEventListener('click', cancelEvent, {capture: true, once: true});
+        getAppWindow().document.addEventListener('click', cancelEvent, {capture: true, once: true});
       }
 
       const playStories = stories.playAfterGesture || !stories.hideInterface;
@@ -3088,7 +3210,8 @@ export default function StoriesViewer(props: {
   let avatarFrom: ReturnType<typeof AvatarNew>;
   const open = () => {
     const target = props.target?.();
-    if(!target || !target.classList.contains('avatar')) {
+    // * the avatar flies to the header with full animations only, so below them nothing waits for it
+    if(!target || !target.classList.contains('avatar') || !liteMode.isAvailable('motion')) {
       setShow(true);
       return;
     }
@@ -3100,7 +3223,7 @@ export default function StoriesViewer(props: {
     });
 
     avatarFrom.node.style.cssText = `position: absolute; visibility: hidden; z-index: 1000; transform-origin: top left;`;
-    document.body.append(avatarFrom.node);
+    getOverlayRoot().append(avatarFrom.node);
 
     if(!untrack(() => show())) {
       createEffect(() => {
@@ -3152,6 +3275,7 @@ export default function StoriesViewer(props: {
 
   const navigationItem: NavigationItem = {
     type: 'stories',
+    noBlurOnPop: Modes.a11y,
     onPop: () => {
       if(animating) {
         return false;
@@ -3176,9 +3300,21 @@ export default function StoriesViewer(props: {
 
     const containers = Array.from(el.querySelectorAll(`.${styles.ViewerStoryContainer}`));
     let needAvatarOpacity: boolean;
+    const dropAvatarFrom = () => {
+      if(avatarFrom) {
+        avatarFrom.node.remove();
+        avatarFrom = undefined;
+      }
+    };
     const target = untrack(() => {
       const target = props.target?.();
       if(!target) {
+        return;
+      }
+
+      // reduced animations: the viewer fades where it stands instead of flying from the avatar
+      if(!liteMode.isAvailable('motion')) {
+        dropAvatarFrom();
         return;
       }
 
@@ -3189,11 +3325,7 @@ export default function StoriesViewer(props: {
 
       const visibleRect = getVisibleRect(target as HTMLElement, overflowElement);
       if(!visibleRect) {
-        if(avatarFrom) {
-          avatarFrom.node.remove();
-          avatarFrom = undefined;
-        }
-
+        dropAvatarFrom();
         return;
       }
 
@@ -3233,7 +3365,7 @@ export default function StoriesViewer(props: {
       avatarFrom.node.style.left = `${rectFrom.left}px`;
       avatarFrom.node.style.visibility = '';
       if(!avatarFrom.node.parentElement) {
-        document.body.append(avatarFrom.node);
+        getOverlayRoot().append(avatarFrom.node);
       }
       const translateX = rectTo.left - rectFrom.left;
       const translateY = rectTo.top - rectFrom.top;
@@ -3296,7 +3428,7 @@ export default function StoriesViewer(props: {
       }
 
       return containers.map((container, idx, arr) => {
-        const offsetX = (next ? idx + 1 : (arr.length - idx)) * 60 * (next ? -1 : 1);
+        const offsetX = (next ? idx + 1 : (arr.length - idx)) * 60 * (next ? -1 : 1) * (I18n.getIsRTL() ? -1 : 1);
         return container.animate(makeKeyframes([{
           transform: `translate3d(calc(var(--translateX) + ${offsetX}px), 0, 0) scale3d(${STORY_SCALE_SMALL / 2}, ${STORY_SCALE_SMALL / 2}, 1)`,
           opacity: 0.001 // fix lag with fractal opacity so element should be prepared for animation
@@ -3388,17 +3520,22 @@ export default function StoriesViewer(props: {
       <Transition
         onEnter={(el, done) => {
           dispatchHeavyAnimationEvent(deferred, 1000);
-          document.body.addEventListener('keydown', onKeyDown);
+          disposeKeyDownListener = bindActiveWindowListener((w) => w.document.body, 'keydown', onKeyDown);
           toggleOverlay(true);
           animate(el, true, done);
         }}
         onAfterEnter={() => {
           animating = false;
+          focusTrap = createFocusTrap(div);
+          // land on the dialog, not on its first button: that one is Close, and Space — the
+          // pause key — would press it
+          focusTrap.activate(previouslyFocused, div);
           actions.viewerReady(true);
           deferred.resolve();
           // play();
         }}
         onExit={(el, done) => {
+          focusTrap?.deactivate();
           animating = true;
           actions.viewerReady(false);
           animate(el, false, done);
@@ -3406,7 +3543,7 @@ export default function StoriesViewer(props: {
         onAfterExit={() => {
           animating = false;
           props.onExit?.();
-          stop();
+          actions.stop();
           deferred.resolve();
         }}
         appear
@@ -3416,6 +3553,24 @@ export default function StoriesViewer(props: {
     </Show>
   );
 }
+
+export const createStoriesViewerWithProvider = (
+  viewerProps: Parameters<typeof StoriesViewer>[0],
+  providerProps: Parameters<typeof StoriesProvider>[0]
+): JSX.Element => {
+  return createRoot((dispose) => {
+    const savedOnExit = viewerProps.onExit;
+    viewerProps.onExit = () => {
+      dispose();
+      savedOnExit?.();
+    };
+    return (
+      <StoriesProvider {...providerProps}>
+        {createStoriesViewer(viewerProps)}
+      </StoriesProvider>
+    );
+  });
+};
 
 export const createStoriesViewer = (
   props: Parameters<typeof StoriesViewer>[0] & Parameters<typeof StoriesProvider>[0]
@@ -3432,7 +3587,7 @@ export const createStoriesViewer = (
   }
 
   return (
-    <Portal mount={document.getElementById('stories-viewer')}>
+    <Portal mount={getAppWindow().document.getElementById('stories-viewer')}>
       <StoriesViewer {...props} />
     </Portal>
   );
@@ -3460,7 +3615,7 @@ export const createStoriesViewerWithStory = (
 export const createStoriesViewerWithPeer = async(
   props: Omit<Parameters<typeof createStoriesViewer>[0], 'peers' | 'index'> & {
     peerId: PeerId,
-    id?: number
+    id?: number,
   }
 ): Promise<void> => {
   const [, rest] = splitProps(props, ['peerId', 'id']);

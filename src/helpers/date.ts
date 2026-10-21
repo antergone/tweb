@@ -1,13 +1,7 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import {MOUNT_CLASS_TO} from '../config/debug';
-import I18n, {i18n} from '../lib/langPack';
-import {days, months} from './date/common';
-import capitalizeFirstLetter from './string/capitalizeFirstLetter';
+import {MOUNT_CLASS_TO} from '@config/debug';
+import I18n, {i18n} from '@lib/langPack';
+import {days, months} from '@helpers/date/common';
+import capitalizeFirstLetter from '@helpers/string/capitalizeFirstLetter';
 
 export const monthsLocalized = months.slice();
 export const daysLocalized = days.slice();
@@ -16,10 +10,30 @@ export const ONE_DAY = 86400;
 export const ONE_DAY_MINUTES = 1440;
 export const ONE_WEEK = 604800;
 export const ONE_WEEK_MINUTES = 10080;
+export const MILLIS_IN_MINUTE = 60 * 1000;
+
+/**
+ * The earliest minute a date/time picker may offer for a "send at/after
+ * `minTimeMs`" control, evaluated against the current time `nowMs`.
+ *
+ * Takes the later of the two and rounds it UP to the next full minute: a
+ * partially-elapsed minute's :00 instant is already in the past, so offering it
+ * would let the user pick a time behind real time — which the server rejects
+ * (e.g. a giveaway end-date that must be strictly in the future). The `max`
+ * keeps the caller's lead time as a floor while never falling behind the clock.
+ *
+ * Both arguments and the result are UNIX timestamps in MILLISECONDS; the result
+ * is minute-aligned.
+ */
+export function earliestSelectableMinuteMs(minTimeMs: number, nowMs: number) {
+  return Math.ceil(Math.max(minTimeMs, nowMs) / MILLIS_IN_MINUTE) * MILLIS_IN_MINUTE;
+}
 
 export function getWeekDays() {
   const dateTimeFormat = I18n.getDateTimeFormat({weekday: 'long'});
-  const date = new Date(Date.UTC(2017, 0, 2));
+  // Monday, January 2nd, at local noon: the formatter works in local time, so a UTC
+  // midnight would still be Sunday anywhere west of Greenwich.
+  const date = new Date(2017, 0, 2, 12);
   const out: string[] = [];
   for(let i = 0; i < 7; ++i) {
     out.push(capitalizeFirstLetter(dateTimeFormat.format(date)));
@@ -50,10 +64,19 @@ export const getWeekNumber = (date: Date) => {
   const dayNum = d.getUTCDay() || 7;
   d.setUTCDate(d.getUTCDate() + 4 - dayNum);
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d.getTime() - yearStart.getTime()) / ONE_DAY) + 1) / 7);
+  // getTime() deltas are in milliseconds, so divide by ms-per-day (ONE_DAY is in seconds)
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / (ONE_DAY * 1000)) + 1) / 7);
 };
 
-export function formatDate(date: Date, today?: Date) {
+
+type FormatDateOptions = {
+  today?: Date;
+  withTime?: boolean;
+  shortMonth?: boolean;
+  overrideIntlOptions?: Intl.DateTimeFormatOptions;
+};
+
+export function formatDate(date: Date, {today, withTime, shortMonth, overrideIntlOptions}: FormatDateOptions = {}) {
   if(!today) {
     today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -61,11 +84,20 @@ export function formatDate(date: Date, today?: Date) {
 
   const options: Intl.DateTimeFormatOptions = {
     day: 'numeric',
-    month: 'long'
+    month: shortMonth ? 'short' : 'long'
   };
+
+  if(withTime) {
+    options.hour = '2-digit';
+    options.minute = '2-digit';
+  }
 
   if(date.getFullYear() !== today.getFullYear()) {
     options.year = 'numeric';
+  }
+
+  if(overrideIntlOptions) {
+    Object.assign(options, overrideIntlOptions);
   }
 
   return new I18n.IntlDateElement({
@@ -135,7 +167,7 @@ export function formatFullSentTimeRaw(timestamp: number, options: {
         month: 'short',
         day: 'numeric',
         year: 'numeric',
-        ...(options.combined ? formatTimeOptions: {})
+        ...(options.combined ? formatTimeOptions : {})
       }
     }).element;
     // dateStr = months[time.getMonth()].slice(0, 3) + ' ' + time.getDate() + ', ' + time.getFullYear();
@@ -145,7 +177,7 @@ export function formatFullSentTimeRaw(timestamp: number, options: {
       options: {
         month: 'short',
         day: 'numeric',
-        ...(options.combined ? formatTimeOptions: {})
+        ...(options.combined ? formatTimeOptions : {})
       }
     }).element;
     // dateStr = months[time.getMonth()].slice(0, 3) + ' ' + time.getDate();
@@ -174,6 +206,11 @@ export function formatTime(date: Date) {
 
 MOUNT_CLASS_TO && (MOUNT_CLASS_TO.formatDateAccordingToTodayNew = formatDateAccordingToTodayNew);
 
+export function formatDaysDuration(days: number, bold?: boolean) {
+  if(days >= 30) return formatMonthsDuration(Math.round(days / 30), bold);
+  return i18n(bold ? 'BoldDays' : 'Days', [days]);
+}
+
 export function formatMonthsDuration(months: number, bold?: boolean) {
   const isYears = months >= 12 && !(months % 12);
   return i18n(
@@ -191,7 +228,17 @@ const monthYearOrDayPattern = new RegExp(`(${anyLetterRegExp}{3,}) ([0-9]{0,4})`
 const yearOrDayAndMonthPattern = new RegExp(`([0-9]{0,4}) (${anyLetterRegExp}{2,})`, 'iu');
 const shortDate = new RegExp('^([0-9]{1,4})(\\.| |/|\\-)([0-9]{1,4})$', 'i');
 const longDate = new RegExp('^([0-9]{1,2})(\\.| |/|\\-)([0-9]{1,2})(\\.| |/|\\-)([0-9]{1,4})$', 'i');
-const numberOfDaysEachMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+export const numberOfDaysEachMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+export const numberOfDaysEachMonthNonLeapYear = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+export function getDaysPerMonthForYear(year: number) {
+  if(isLeapYear(year)) {
+    return numberOfDaysEachMonth;
+  }
+
+  return numberOfDaysEachMonthNonLeapYear;
+}
+
 export type DateData = {
   title: string,
   minDate: number,
@@ -305,7 +352,7 @@ export function fillTipDates(query: string, dates: DateData[]) {
     const g1 = matches[1];
     const g2 = matches[3];
     const g3 = matches[5];
-    if(!matches[2] === matches[4]) {
+    if(matches[2] !== matches[4]) {
       return;
     }
 

@@ -1,62 +1,71 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
 /* @refresh reload */
 
-import App from './config/app';
-import blurActiveElement from './helpers/dom/blurActiveElement';
-import {IS_STICKY_INPUT_BUGGED} from './helpers/dom/fixSafariStickyInputFocusing';
-import loadFonts from './helpers/dom/loadFonts';
-import IS_EMOJI_SUPPORTED from './environment/emojiSupport';
-import {IS_ANDROID, IS_APPLE, IS_APPLE_MOBILE, IS_FIREFOX, IS_MOBILE, IS_MOBILE_SAFARI, IS_SAFARI} from './environment/userAgent';
-import './materialize.scss';
-import './scss/style.scss';
-import pause from './helpers/schedulers/pause';
-import setWorkerProxy from './helpers/setWorkerProxy';
-import toggleAttributePolyfill from './helpers/dom/toggleAttributePolyfill';
-import rootScope from './lib/rootScope';
-import IS_TOUCH_SUPPORTED from './environment/touchSupport';
-import I18n, {checkLangPackForUpdates, i18n} from './lib/langPack';
-import './helpers/peerIdPolyfill';
-import './lib/polyfill';
-import apiManagerProxy from './lib/mtproto/mtprotoworker';
-import getProxiedManagers from './lib/appManagers/getProxiedManagers';
-import themeController from './helpers/themeController';
-import overlayCounter from './helpers/overlayCounter';
-import singleInstance, {InstanceDeactivateReason} from './lib/mtproto/singleInstance';
-import {parseUriParamsLine} from './helpers/string/parseUriParams';
-import Modes from './config/modes';
-import {AuthState} from './types';
-import DEBUG, {IS_BETA} from './config/debug';
-import IS_INSTALL_PROMPT_SUPPORTED from './environment/installPrompt';
-import cacheInstallPrompt from './helpers/dom/installPrompt';
-import {fillLocalizedDates} from './helpers/date';
-import {nextRandomUint} from './helpers/random';
-import {IS_OVERLAY_SCROLL_SUPPORTED, USE_CUSTOM_SCROLL, USE_NATIVE_SCROLL} from './environment/overlayScrollSupport';
-import IMAGE_MIME_TYPES_SUPPORTED, {IMAGE_MIME_TYPES_SUPPORTED_PROMISE} from './environment/imageMimeTypesSupport';
-import MEDIA_MIME_TYPES_SUPPORTED from './environment/mediaMimeTypesSupport';
-import {doubleRaf} from './helpers/schedulers';
-import {getCurrentAccount} from './lib/accounts/getCurrentAccount';
-import AccountController from './lib/accounts/accountController';
-import {changeAccount} from './lib/accounts/changeAccount';
-import {MAX_ACCOUNTS_FREE, MAX_ACCOUNTS_PREMIUM} from './lib/accounts/constants';
-import sessionStorage from './lib/sessionStorage';
-import replaceChildrenPolyfill from './helpers/dom/replaceChildrenPolyfill';
-import listenForWindowPrint from './helpers/dom/windowPrint';
-import cancelImageEvents from './helpers/dom/cancelImageEvents';
-import PopupElement from './components/popups';
-import appRuntimeManager from './lib/appManagers/appRuntimeManager';
-import PasscodeLockScreenController from './components/passcodeLock/passcodeLockScreenController'; PasscodeLockScreenController;
-import type {LangPackDifference} from './layer';
-import commonStateStorage from './lib/commonStateStorage';
-import {MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, SIDEBAR_COLLAPSE_FACTOR} from './components/sidebarLeft/constants';
-import useHasFoldersSidebar from './stores/foldersSidebar';
+// must run before any other module — under the preview flag the first swaps
+// every DOM timer for worker-driven ones (hidden tabs throttle/freeze timers)
+// and spoofs visibility, the second swaps requestAnimationFrame for a timer so
+// a non-painting tab still boots
+import '@helpers/dom/previewUnfreeze';
+import '@helpers/dom/previewRaf';
+import App from '@config/app';
+import blurActiveElement from '@helpers/dom/blurActiveElement';
+import {IS_STICKY_INPUT_BUGGED} from '@helpers/dom/fixSafariStickyInputFocusing';
+import loadFonts from '@helpers/dom/loadFonts';
+import IS_EMOJI_SUPPORTED from '@environment/emojiSupport';
+import {IS_ANDROID, IS_APPLE, IS_APPLE_MOBILE, IS_FIREFOX, IS_MOBILE, IS_SAFARI} from '@environment/userAgent';
+import '@/materialize.scss';
+import '@/scss/style.scss';
+import pause from '@helpers/schedulers/pause';
+import setWorkerProxy from '@helpers/setWorkerProxy';
+import toggleAttributePolyfill from '@helpers/dom/toggleAttributePolyfill';
+import rootScope from '@lib/rootScope';
+import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
+import I18n, {checkLangPackForUpdates, i18n, LangPackKey} from '@lib/langPack';
+import '@helpers/peerIdPolyfill';
+import '@lib/polyfill';
+import '@lib/debug/mountLogExport'; // main-thread-only: wires window.downloadLogs / collectLogs
+import '@lib/debug/memoryReport'; // main-thread-only: wires window.memoryReport
+import '@lib/debug/memoryWatch'; // main-thread-only: wires window.memoryWatch (crash-proof memory series)
+import apiManagerProxy from '@lib/apiManagerProxy';
+import getProxiedManagers from '@lib/getProxiedManagers';
+import themeController from '@helpers/themeController';
+import overlayCounter from '@helpers/overlayCounter';
+import {getAppWindow, onAppWindowChange} from '@helpers/appWindow';
+import singleInstance, {InstanceDeactivateReason} from '@lib/singleInstance';
+import {parseUriParamsLine} from '@helpers/string/parseUriParams';
+import Modes from '@config/modes';
+import {AuthState} from '@types';
+import DEBUG, {IS_BETA, IS_POPUP_SANDBOX} from '@config/debug';
+import IS_INSTALL_PROMPT_SUPPORTED from '@environment/installPrompt';
+import cacheInstallPrompt from '@helpers/dom/installPrompt';
+import {fillLocalizedDates} from '@helpers/date';
+import {nextRandomUint} from '@helpers/random';
+import {createEffect} from 'solid-js';
+import {IS_OVERLAY_SCROLL_SUPPORTED, USE_CUSTOM_SCROLL, USE_NATIVE_SCROLL} from '@environment/overlayScrollSupport';
+import IMAGE_MIME_TYPES_SUPPORTED, {IMAGE_MIME_TYPES_SUPPORTED_PROMISE} from '@environment/imageMimeTypesSupport';
+import MEDIA_MIME_TYPES_SUPPORTED from '@environment/mediaMimeTypesSupport';
+import {doubleRaf} from '@helpers/schedulers';
+import {getCurrentAccount} from '@lib/accounts/getCurrentAccount';
+import AccountController from '@lib/accounts/accountController';
+import {changeAccount} from '@lib/accounts/changeAccount';
+import {MAX_ACCOUNTS_FREE, MAX_ACCOUNTS_PREMIUM} from '@lib/accounts/constants';
+import sessionStorage from '@lib/sessionStorage';
+import replaceChildrenPolyfill from '@helpers/dom/replaceChildrenPolyfill';
+import listenForWindowPrint from '@helpers/dom/windowPrint';
+import cancelImageEvents from '@helpers/dom/cancelImageEvents';
+import listenForLinkPress from '@helpers/dom/linkPress';
+import PopupElement, {createPopup} from '@components/popups/indexTsx';
+import PasscodeLockScreenController from '@components/passcodeLock/passcodeLockScreenController'; PasscodeLockScreenController;
+import commonStateStorage from '@lib/commonStateStorage';
+import {useAppSettings, setAppSettingsSilent} from '@stores/appSettings';
+import {isUserCollapsedLeft} from '@helpers/updateColumnWidths';
+import {useMediaSizes} from '@helpers/mediaSizes';
+import useHasFoldersSidebar, {useIsSidebarCollapsed} from '@stores/foldersSidebar';
+import appNavigationController from '@components/appNavigationController';
+import {preventCrossTabDynamicImportDeadlock} from '@helpers/preventDeadlock';
+import appChatBackground from '@components/chat/bubbles/chatBackground';
 
-// import commonStateStorage from './lib/commonStateStorage';
-// import { STATE_INIT } from './config/state';
+// import commonStateStorage from '@lib/commonStateStorage';
+// import { STATE_INIT } from '@config/state';
 
 // if(DEBUG) {
 //   (async() => {
@@ -96,9 +105,28 @@ function randomlyChooseVersionFromSearch() {
   } catch(err) {}
 }
 
+async function checkLastActiveAccountFromTMe() {
+  try {
+    if(
+      App.isMainDomain &&
+      document.referrer &&
+      /^(t|telegram)\.me/i.test(new URL(document.referrer).host)
+    ) {
+      const [totalAccounts, {accountNumber}] = await Promise.all([
+        AccountController.getUnencryptedTotalAccounts(),
+        sessionStorage.get('xt_instance')
+      ]);
+
+      if(accountNumber <= totalAccounts && accountNumber !== getCurrentAccount()) {
+        changeAccount(accountNumber, false, true);
+      }
+    }
+  } catch(err) {}
+}
+
 function setManifest() {
   const manifest = document.getElementById('manifest') as HTMLLinkElement;
-  if(manifest) manifest.href = `site${IS_APPLE && !IS_APPLE_MOBILE ? '_apple' : ''}.webmanifest?v=jw3mK7G9Aq`;
+  if(manifest) manifest.href = `site${IS_APPLE && !IS_APPLE_MOBILE ? '_apple' : ''}.webmanifest?v=p9R6mT3xKv`;
 }
 
 function setViewportHeightListeners() {
@@ -107,7 +135,7 @@ function setViewportHeightListeners() {
   let setViewportVH = false/* , hasFocus = false */;
   let lastVH: number;
   const setVH = () => {
-    let vh = (setViewportVH && !overlayCounter.isOverlayActive ? (w as VisualViewport).height || (w as Window).innerHeight : window.innerHeight) * 0.01;
+    let vh = (setViewportVH && !overlayCounter.isOverlayActive ? (w as VisualViewport).height || (w as Window).innerHeight : getAppWindow().innerHeight) * 0.01;
     vh = +vh.toFixed(2);
     if(lastVH === vh) {
       return;
@@ -130,8 +158,17 @@ function setViewportHeightListeners() {
     } */
   };
 
-  window.addEventListener('resize', setVH);
-  setVH();
+  // Bind the --vh resize listener to the active app window, re-binding when the client moves into /
+  // out of the Document PiP window so --vh tracks whichever viewport the app is rendered in.
+  let vhWindow: Window;
+  const bindVH = (win: Window) => {
+    vhWindow?.removeEventListener('resize', setVH);
+    vhWindow = win;
+    win.addEventListener('resize', setVH);
+    setVH();
+  };
+  bindVH(getAppWindow());
+  onAppWindowChange((win) => bindVH(win));
 
   if(IS_STICKY_INPUT_BUGGED) {
     const toggleResizeMode = () => {
@@ -166,28 +203,47 @@ function setViewportHeightListeners() {
 }
 
 function setSidebarLeftWidth() {
-  const sidebarEl = document.getElementById('column-left');
-  const storedWidth = localStorage.getItem('sidebar-left-width');
-
-  let validatedWidth = parseInt(storedWidth);
-  validatedWidth = isNaN(validatedWidth) ? undefined : validatedWidth;
-
-  if(validatedWidth > MAX_SIDEBAR_WIDTH) validatedWidth = MAX_SIDEBAR_WIDTH;
-  else if(validatedWidth < MIN_SIDEBAR_WIDTH * SIDEBAR_COLLAPSE_FACTOR) validatedWidth = 0;
-  else if(validatedWidth < MIN_SIDEBAR_WIDTH) validatedWidth = MIN_SIDEBAR_WIDTH;
-
-  if(typeof validatedWidth === 'number' && String(validatedWidth) !== storedWidth)
-    localStorage.setItem('sidebar-left-width', validatedWidth + '');
-
-  if(validatedWidth === 0) {
-    sidebarEl.classList.add('is-collapsed');
-  } else if(validatedWidth) {
-    document.documentElement.style.setProperty('--current-sidebar-left-width', validatedWidth + 'px');
-  }
+  // updateColumnWidths owns the loaded preference and the CSS vars; we
+  // mirror the EFFECTIVE collapsed state onto:
+  //   • the SolidJS signal (consumed by pendingSuggestion etc.)
+  //   • the #column-left.is-collapsed class
+  //
+  // "Effective" = persisted preference AND not on handheld. At handheld
+  // the layout is single-column, so the bar must render expanded —
+  // `.is-collapsed .item-main` would otherwise clamp the inner slider to
+  // --default-column-width and leave a gap on the right edge of the
+  // column, and pendingSuggestion would fall back to its icon-only mode.
+  //
+  // 601-925px (floating range) keeps the class on intentionally — the
+  // drawer's SCSS expects it and pendingSuggestion's icon-only variant
+  // fits the 360-wide drawer. The wider `isCollapsed()` getter still
+  // returns false there for its own layout decisions inside sidebarLeft.
+  //
+  // The effects react to viewport changes; the drag handler in
+  // sidebarLeft pushes preference changes into the signal and class
+  // directly (drag only happens off-handheld, so its raw value is
+  // already the effective one).
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useIsSidebarCollapsed();
+  const sizes = useMediaSizes();
+  createEffect(() => {
+    setIsSidebarCollapsed(isUserCollapsedLeft() && !sizes.isMobile);
+  });
+  createEffect(() => {
+    const el = document.getElementById('column-left');
+    if(el) el.classList.toggle('is-collapsed', isSidebarCollapsed());
+  });
 }
 
 function setRootClasses() {
   const add: string[] = [];
+
+  if(Modes.a11y) {
+    add.push('a11y');
+    // Pinch zoom. Not without the flag: with maximum-scale gone iOS also zooms
+    // into every field whose text is under 16px.
+    const viewport = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+    if(viewport) viewport.content = viewport.content.replace(/,(maximum-scale=1|user-scalable=no)/g, '');
+  }
 
   if(IS_EMOJI_SUPPORTED) {
     add.push('native-emoji');
@@ -195,13 +251,20 @@ function setRootClasses() {
 
   if(USE_NATIVE_SCROLL) {
     add.push('native-scroll');
-  } else if(IS_OVERLAY_SCROLL_SUPPORTED) {
-    add.push('overlay-scroll');
-  } else if(USE_CUSTOM_SCROLL) {
-    add.push('custom-scroll');
+  } else {
+    createEffect(() => {
+      const root = document.documentElement;
+      if(IS_OVERLAY_SCROLL_SUPPORTED()) {
+        root.classList.add('overlay-scroll');
+        root.classList.remove('custom-scroll');
+      } else if(USE_CUSTOM_SCROLL()) {
+        root.classList.remove('overlay-scroll');
+        root.classList.add('custom-scroll');
+      }
+    });
   }
 
-  // root.style.setProperty('--quote-icon', `"${getIconContent('quote')}"`);
+  // root.style.setProperty('--quote-icon', `"${getIconContent('quote_filled')}"`);
 
   if(IS_FIREFOX) {
     add.push('is-firefox', 'no-backdrop');
@@ -269,57 +332,84 @@ function setRootClasses() {
 }
 
 function onInstanceDeactivated(reason: InstanceDeactivateReason) {
-  const isUpdated = reason === 'version';
-  const popup = PopupElement.createPopup(PopupElement, 'popup-instance-deactivated', {overlayClosable: true});
-  const c = document.createElement('div');
-  c.classList.add('instance-deactivated-container');
-  (popup as any).container.replaceWith(c);
+  const onVersionClick = () => {
+    appNavigationController.reload();
+  };
 
-  const header = document.createElement('div');
-  header.classList.add('header');
-  header.append(i18n(isUpdated ? 'Deactivated.Version.Title' : 'Deactivated.Title'));
-
-  const subtitle = document.createElement('div');
-  subtitle.classList.add('subtitle');
-  subtitle.append(i18n(isUpdated ? 'Deactivated.Version.Subtitle' : 'Deactivated.Subtitle'));
-
-  c.append(header, subtitle);
-
-  document.body.classList.add('deactivated');
-
-  const onClose = isUpdated ? () => {
-    appRuntimeManager.reload();
-  } : () => {
+  const onTabsClick = () => {
     document.body.classList.add('deactivated-backwards');
 
-    singleInstance.activateInstance();
+    if(reason === 'otherClient') {
+      singleInstance.onMyClient();
+    } else {
+      singleInstance.activateInstance();
+    }
 
     setTimeout(() => {
       document.body.classList.remove('deactivated', 'deactivated-backwards');
     }, 333);
   };
 
-  popup.addEventListener('close', onClose);
-  popup.show();
+  const onOtherClientClick = onTabsClick;
+
+  const map: {[key in InstanceDeactivateReason]: {
+    title: LangPackKey,
+    subtitle: LangPackKey,
+    onClick: () => void
+  }} = {
+    version: {
+      title: 'Deactivated.Version.Title',
+      subtitle: 'Deactivated.Version.Subtitle',
+      onClick: onVersionClick
+    },
+    tabs: {
+      title: 'Deactivated.Title',
+      subtitle: 'Deactivated.Subtitle',
+      onClick: onTabsClick
+    },
+    otherClient: {
+      title: 'Deactivated.OtherClient.Title',
+      subtitle: 'Deactivated.OtherClient.Subtitle',
+      onClick: onOtherClientClick
+    }
+  };
+
+  document.body.classList.add('deactivated');
+
+  const header = document.createElement('div');
+  header.classList.add('header');
+  header.append(i18n(map[reason].title));
+
+  const subtitle = document.createElement('div');
+  subtitle.classList.add('subtitle');
+  subtitle.append(i18n(map[reason].subtitle));
+
+  // the entry file is plain .ts, so the popup is composed by calling the component
+  createPopup(() => PopupElement({
+    class: 'popup-instance-deactivated',
+    containerClass: 'instance-deactivated-container',
+    closable: true,
+    onClose: map[reason].onClick,
+    children: [header, subtitle]
+  }));
 };
 
 const TIME_LABEL = 'Elapsed time since unlocked';
-
-function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDifference) {
-  if(langPack.lang_code === 'ar' || langPack.lang_code === 'fa' && IS_BETA && false) {
-    document.documentElement.classList.add('is-rtl');
-    document.documentElement.dir = 'rtl';
-    document.documentElement.lang = langPack.lang_code;
-    I18n.setRTL(true);
-  } else {
-    document.documentElement.dir = 'ltr';
-  }
-}
 
 (window as any)['showIconLibrary'] = async() => {
   const {showIconLibrary} = await import('./components/iconLibrary/trigger');
   showIconLibrary();
 };
+
+// The popup sandbox, over a running app (`?popups=1` boots straight into it instead). The bare
+// `import.meta.env.DEV` is deliberate: only a `false` literal at the call site makes rolldown drop
+// the dynamic import before chunking. The authorized preview is a dev server, so it is covered.
+if(import.meta.env.DEV) {
+  (window as any)['showPopupSandbox'] = async() => {
+    const {showPopupSandbox} = await import('@components/popupSandbox');
+    await showPopupSandbox();
+  };
+}
 
 /* false &&  */document.addEventListener('DOMContentLoaded', async() => {
   const perf = performance.now();
@@ -327,26 +417,50 @@ function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDiff
   setSidebarLeftWidth();
   toggleAttributePolyfill();
   replaceChildrenPolyfill();
-  rootScope.managers = getProxiedManagers();
   setManifest();
   setViewportHeightListeners();
   setWorkerProxy; // * just to import
   listenForWindowPrint();
   cancelImageEvents();
+  listenForLinkPress();
   setRootClasses();
+
+  // ?popups=1 — the popup sandbox: every popup, opened by click with mock data and no session.
+  // It has to take over here, before the session is restored and the auth flow starts.
+  // The literal `import.meta.env.DEV` is not redundant with `IS_POPUP_SANDBOX` (which already
+  // implies it): only a `false` right at the call site makes rolldown drop the dynamic import
+  // before chunking, and with it the whole sandbox chunk. Behind the imported const alone the
+  // branch still folds away, but a ~150 KB orphan chunk is emitted that nothing ever loads.
+  if(import.meta.env.DEV && IS_POPUP_SANDBOX) {
+    // `bootstrapState` goes first, on its own: see the note at the top of that module.
+    await import('@components/popupSandbox/bootstrapState');
+    const {startPopupSandbox} = await import('@components/popupSandbox');
+    await startPopupSandbox();
+    return;
+  }
+
+  rootScope.managers = getProxiedManagers();
+  await checkLastActiveAccountFromTMe();
 
   if(IS_INSTALL_PROMPT_SUPPORTED) {
     cacheInstallPrompt();
   }
 
+  // Make sure this is before checking if the app is locked.
+  // If this value is cached, and a different tab locks/unlocks, we'll see the wrong state of the app.
+  await preventCrossTabDynamicImportDeadlock();
+
   await PasscodeLockScreenController.waitForUnlock(async() => {
-    rootScope.settings = await commonStateStorage.get('settings');
+    const settings = await commonStateStorage.get('settings');
+    settings && setAppSettingsSilent(settings);
     themeController.setThemeListener();
 
-    const langPack = await I18n.getCacheLangPackAndApply();
-    setDocumentLangPackProperties(langPack);
+    appChatBackground.attach();
+    appChatBackground.setBackground({transition: 'instant'});
 
-    if(IS_BETA) import('./pages/pageIm'); // cache it
+    await I18n.getCacheLangPackAndApply();
+
+    if(IS_BETA) import('./pages/bootstrapIm'); // cache it
     // const settings = await commonStateStorage.get('settings');
     // const timeFormat =
     // I18n.setTimeFormat(settings?.timeFormat || STATE_INIT.settings?.timeFormat);
@@ -362,6 +476,9 @@ function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDiff
   // * (1)
   const allStates = await apiManagerProxy.loadAllStates();
   const stateResult = allStates[getCurrentAccount()];
+
+  // console.log(stateResult);
+  // await pause(10000000);
 
   console.timeLog(TIME_LABEL, 'allStates loaded');
 
@@ -391,7 +508,8 @@ function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDiff
 
   const langPack = await I18n.getCacheLangPackAndApply();
   console.timeLog(TIME_LABEL, 'await I18n.getCacheLangPack()');
-  I18n.setTimeFormat(rootScope.settings.timeFormat);
+  const [appSettings] = useAppSettings();
+  I18n.setTimeFormat(appSettings.timeFormat);
   onLanguageApply();
   rootScope.addEventListener('language_apply', onLanguageApply);
 
@@ -400,12 +518,13 @@ function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDiff
     return;
   }
 
+  apiManagerProxy.onLanguageChange(I18n.getLastRequestedLangCode());
   await apiManagerProxy.sendAllStates(allStates);
 
   console.timeLog(TIME_LABEL, 'sent all states (2)');
 
-  const {setHasFoldersSidebar} = useHasFoldersSidebar();
-  setHasFoldersSidebar(!!rootScope.settings.tabsInSidebar);
+  const [, setHasFoldersSidebar] = useHasFoldersSidebar();
+  setHasFoldersSidebar(!!appSettings.tabsInSidebar);
 
   rootScope.managers.rootScope.getPremium().then((isPremium) => {
     rootScope.premium = isPremium;
@@ -414,7 +533,7 @@ function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDiff
   themeController.setThemeListener();
 
   // * fetch lang pack updates
-  if(langPack.localVersion !== App.langPackLocalVersion && IS_BETA) {
+  if((langPack.localVersion !== App.langPackLocalVersion || true) && IS_BETA) {
     I18n.getLangPackAndApply(langPack.lang_code);
   } else {
     checkLangPackForUpdates();
@@ -444,38 +563,48 @@ function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDiff
 
   console.timeLog(TIME_LABEL, 'IMAGE_MIME_TYPES_SUPPORTED_PROMISE');
 
-
-  setDocumentLangPackProperties(langPack);
+  appChatBackground.attach();
+  appChatBackground.setBackground({transition: 'instant'});
 
   let authState = stateResult.state.authState;
 
   const hash = location.hash;
   const splitted = hash.split('?');
   const params = parseUriParamsLine(splitted[1] ?? splitted[0].slice(1));
+  const webAuthTokenIsTest = params.tgWebAuthTest !== undefined && !!+params.tgWebAuthTest;
   if(params.tgWebAuthToken && authState._ !== 'authStateSignedIn') {
     const data: AuthState.signImport['data'] = {
       token: params.tgWebAuthToken,
       dcId: +params.tgWebAuthDcId,
       userId: params.tgWebAuthUserId.toUserId(),
-      isTest: params.tgWebAuthTest !== undefined && !!+params.tgWebAuthTest,
+      isTest: webAuthTokenIsTest,
       tgAddr: params.tgaddr
     };
 
     if(data.isTest !== Modes.test) {
-      const urlSearchParams = new URLSearchParams(location.search);
+      const url = new URL(location.href);
       if(+params.tgWebAuthTest) {
-        urlSearchParams.set('test', '1');
+        url.searchParams.set('test', '1');
       } else {
-        urlSearchParams.delete('test');
+        url.searchParams.delete('test');
       }
 
-      location.search = urlSearchParams.toString();
+      appNavigationController.navigateToUrl(url.toString());
       return;
     }
 
     rootScope.managers.appStateManager.pushToState('authState', authState = {_: 'authStateSignImport', data});
+  }
 
-    // appNavigationController.overrideHash('?tgaddr=' + encodeURIComponent(params.tgaddr));
+  // Already signed in, so the import above never ran and the token is left
+  // hanging — a token for the other environment is unreachable from here, the
+  // rest is ours to drop.
+  if(params.tgWebAuthToken && authState._ === 'authStateSignedIn' && webAuthTokenIsTest === Modes.test) {
+    rootScope.managers.appAccountManager.cancelWebTokenAuthorization(params.tgWebAuthToken, +params.tgWebAuthDcId);
+  }
+
+  if(params.tgWebAuthToken) {
+    appNavigationController.overrideHash(params.tgaddr ? '#?tgaddr=' + encodeURIComponent(params.tgaddr) : '');
   }
 
   if(authState._ !== 'authStateSignedIn'/*  || 1 === 1 */) {
@@ -493,157 +622,51 @@ function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDiff
       }
     })();
 
-    const el = document.getElementById('auth-pages');
-    let scrollable: HTMLElement;
-
-    let isEnteringAnimationFinished = false;
-
-    const finishEnteringAnimation = async() => {
-      if(isEnteringAnimationFinished) return;
-      isEnteringAnimationFinished = true;
-
-      await doubleRaf();
-      el.classList.add('auth-pages-entering');
-
-      await pause(1000); // Need a little more time for the animation to finish
-      el.classList.remove('auth-pages-enter', 'auth-pages-entering');
-    }
-
-    if(el) {
-      if(await sessionStorage.get('should_animate_auth')) {
-        await sessionStorage.delete('should_animate_auth');
-        el.classList.add('auth-pages-enter');
-
-        // Just in case
-        pause(1000).then(() => finishEnteringAnimation());
-      }
-
-      scrollable = el.querySelector('.scrollable') as HTMLElement;
-      if((!IS_TOUCH_SUPPORTED || IS_MOBILE_SAFARI)) {
-        scrollable.classList.add('no-scrollbar');
-      }
-
-      // * don't remove this line
-      scrollable.style.opacity = '0';
-
-      const placeholder = document.createElement('div');
-      placeholder.classList.add('auth-placeholder');
-
-      scrollable.prepend(placeholder);
-      scrollable.append(placeholder.cloneNode());
-    }
-
     try {
       await Promise.all([
-        import('./lib/mtproto/telegramMeWebManager'),
-        import('./lib/mtproto/webPushApiManager')
+        import('./lib/telegramMeWebManager'),
+        import('./lib/webPushApiManager')
       ]).then(([meModule, pushModule]) => {
         meModule.default.setAuthorized(false);
-        pushModule.default.forceUnsubscribe();
+        pushModule.default.unsubscribe();
       });
     } catch(err) {
 
     }
 
-    let pagePromise: Promise<void>;
-    // langPromise.then(async() => {
-    switch(authState._) {
-      case 'authStateSignIn':
-        pagePromise = (await import('./pages/pageSignIn')).default.mount();
-        break;
-      case 'authStateSignQr':
-        pagePromise = (await import('./pages/pageSignQR')).default.mount();
-        break;
-      case 'authStateAuthCode':
-        pagePromise = (await import('./pages/pageAuthCode')).default.mount(authState.sentCode);
-        break;
-      case 'authStatePassword':
-        pagePromise = (await import('./pages/pagePassword')).default.mount();
-        break;
-      case 'authStateSignUp':
-        pagePromise = (await import('./pages/pageSignUp')).default.mount(authState.authCode);
-        break;
-      case 'authStateSignImport':
-        pagePromise = (await import('./pages/pageSignImport')).default.mount(authState.data);
-        break;
-    }
-    // });
-
-    if(scrollable) {
-      // wait for text appear
-      if(pagePromise) {
-        await pagePromise;
-      }
-
-      const promise = 'fonts' in document ?
-        Promise.race([
-          pause(1000),
-          document.fonts.ready
-        ]) :
-        Promise.resolve();
-
-      promise.then(async() => {
-        await pause(20);
-        finishEnteringAnimation();
-      });
-
-      fadeInWhenFontsReady(scrollable, promise);
-    }
-
-    /* setTimeout(async() => {
-      (await import('./pages/pageAuthCode')).default.mount({
-        "_": "auth.sentCode",
-        "pFlags": {},
-        "flags": 6,
-        "type": {
-          "_": "auth.sentCodeTypeSms",
-          "length": 5
-        },
-        "phone_code_hash": "",
-        "next_type": {
-          "_": "auth.codeTypeCall"
-        },
-        "timeout": 120,
-        "phone_number": ""
-      });
-
-      (await import('./pages/pageSignQR')).default.mount();
-
-      (await import('./pages/pagePassword')).default.mount();
-
-      (await import('./pages/pageSignUp')).default.mount({
-        "phone_code_hash": "",
-        "phone_number": ""
-      });
-    }, 500); */
+    const {mountAuthFlow} = await import('./pages/mountAuthFlow');
+    mountAuthFlow(authState);
   } else {
     console.log('Will mount IM page:', Date.now() / 1000);
 
     const fontsPromise = loadFonts();
     fadeInWhenFontsReady(document.getElementById('main-columns'), fontsPromise);
 
-    const [page, shouldAnimate] = await Promise.all([
-      import('./pages/pageIm').then((module) => module.default),
+    const [{bootstrapIm}, shouldAnimate] = await Promise.all([
+      import('./pages/bootstrapIm'),
       sessionStorage.get('should_animate_main')
     ]);
+
+    const pageChatsEl = document.getElementById('page-chats') as HTMLDivElement;
+
     if(shouldAnimate) {
       await sessionStorage.delete('should_animate_main');
-      page.pageEl.classList.add('main-screen-enter');
+      pageChatsEl.classList.add('main-screen-enter');
 
-      await page.mount();
-      console.timeLog(TIME_LABEL, 'await page.mount()');
+      await bootstrapIm();
+      console.timeLog(TIME_LABEL, 'await bootstrapIm()');
 
       await fontsPromise;
       console.timeLog(TIME_LABEL, 'await fontsPromise');
 
 
       await doubleRaf();
-      page.pageEl.classList.add('main-screen-entering');
+      pageChatsEl.classList.add('main-screen-entering');
       await pause(200);
 
-      page.pageEl.classList.remove('main-screen-enter', 'main-screen-entering');
+      pageChatsEl.classList.remove('main-screen-enter', 'main-screen-entering');
     } else {
-      await page.mount();
+      await bootstrapIm();
     }
   }
 });

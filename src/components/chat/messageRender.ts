@@ -1,39 +1,57 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import type LazyLoadQueue from '../lazyLoadQueue';
-import {formatFullSentTimeRaw, formatTime} from '../../helpers/date';
-import {getFullDate} from '../../helpers/date/getFullDate';
-import setInnerHTML from '../../helpers/dom/setInnerHTML';
-import {Middleware} from '../../helpers/middleware';
-import formatNumber from '../../helpers/number/formatNumber';
-import {AvailableEffect, Message, MessageReplyHeader} from '../../layer';
-import getPeerId from '../../lib/appManagers/utils/peers/getPeerId';
-import {i18n, _i18n} from '../../lib/langPack';
-import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
-import wrapEmojiText from '../../lib/richTextProcessor/wrapEmojiText';
-import rootScope from '../../lib/rootScope';
-import Icon from '../icon';
-import PeerTitle from '../peerTitle';
-import wrapReply from '../wrappers/reply';
-import Chat, {ChatType} from './chat';
-import RepliesElement from './replies';
-import ChatBubbles from './bubbles';
-import getFwdFromName from '../../lib/appManagers/utils/messages/getFwdFromName';
-import deferredPromise from '../../helpers/cancellablePromise';
-import wrapSticker from '../wrappers/sticker';
-import cancelEvent from '../../helpers/dom/cancelEvent';
-import getStickerEffectThumb from '../../lib/appManagers/utils/stickers/getStickerEffectThumb';
-import wrapStickerAnimation from '../wrappers/stickerAnimation';
-import Scrollable from '../scrollable';
-import appDownloadManager from '../../lib/appManagers/appDownloadManager';
-import indexOfAndSplice from '../../helpers/array/indexOfAndSplice';
-import {numberThousandSplitterForStars} from '../../helpers/number/numberThousandSplitter';
+import type LazyLoadQueue from '@components/lazyLoadQueue';
+import isAnchoredEphemeralMessage from '@appManagers/utils/messages/isAnchoredEphemeralMessage';
+import {formatDate, formatFullSentTimeRaw, formatTime} from '@helpers/date';
+import {getFullDate} from '@helpers/date/getFullDate';
+import setInnerHTML from '@helpers/dom/setInnerHTML';
+import {Middleware} from '@helpers/middleware';
+import formatNumber from '@helpers/number/formatNumber';
+import {AvailableEffect, Message, MessageReplyHeader} from '@layer';
+import getPeerId from '@appManagers/utils/peers/getPeerId';
+import I18n, {i18n, _i18n, LangPackKey} from '@lib/langPack';
+import apiManagerProxy from '@lib/apiManagerProxy';
+import wrapEmojiText from '@lib/richTextProcessor/wrapEmojiText';
+import rootScope from '@lib/rootScope';
+import Icon from '@components/icon';
+import PeerTitle from '@components/peerTitle';
+import wrapReply from '@components/wrappers/reply';
+import Chat from '@components/chat/chat';
+import {ChatType} from './chatType';
+import RepliesElement from '@components/chat/replies';
+import ChatBubbles from '@components/chat/bubbles';
+import getFwdFromName from '@appManagers/utils/messages/getFwdFromName';
+import deferredPromise from '@helpers/cancellablePromise';
+import wrapSticker from '@components/wrappers/sticker';
+import cancelEvent from '@helpers/dom/cancelEvent';
+import getStickerEffectThumb from '@appManagers/utils/stickers/getStickerEffectThumb';
+import wrapStickerAnimation from '@components/wrappers/stickerAnimation';
+import Scrollable from '@components/scrollable';
+import appDownloadManager from '@lib/appDownloadManager';
+import indexOfAndSplice from '@helpers/array/indexOfAndSplice';
+import numberThousandSplitter, {numberThousandSplitterForStars} from '@helpers/number/numberThousandSplitter';
+import {makeTime} from '@components/chat/utils';
+import {useAppConfig} from '@stores/appState';
+import {formatNanoton} from '@helpers/paymentsWrapCurrencyAmount';
 
 const NBSP = '&nbsp;';
+
+const DAY = 86400;
+const SCHEDULE_REPEAT_MAP: {period: number, key: LangPackKey, args?: any[]}[] = [
+  {period: DAY, key: 'Schedule.Repeated.Daily'},
+  {period: 7 * DAY, key: 'Schedule.Repeated.Weekly'},
+  {period: 14 * DAY, key: 'Schedule.Repeated.Biweekly'},
+  {period: 30 * DAY, key: 'Schedule.Repeated.Monthly'},
+  {period: 91 * DAY, key: 'Schedule.Repeated.EveryMonth', args: [3]},
+  {period: 182 * DAY, key: 'Schedule.Repeated.EveryMonth', args: [6]},
+  {period: 365 * DAY, key: 'Schedule.Repeated.Yearly'}
+];
+
+const makeScheduleRepeatPeriod = (period: number) => {
+  const entry = SCHEDULE_REPEAT_MAP.find((e) => e.period >= period) ?? SCHEDULE_REPEAT_MAP[SCHEDULE_REPEAT_MAP.length - 1];
+  const span = document.createElement('span');
+  span.classList.add('time-repeat', 'time-part');
+  span.append(i18n(entry.key, entry.args));
+  return span;
+};
 
 const makeEdited = () => {
   const edited = document.createElement('i');
@@ -42,8 +60,31 @@ const makeEdited = () => {
   return edited;
 };
 
-const makeTime = (date: Date, includeDate?: boolean) => {
-  return includeDate ? formatFullSentTimeRaw(date.getTime() / 1000 | 0, {combined: true}).dateEl : formatTime(date);
+// layer 229: an ordinary message an ephemeral one is standing in for says "updated" where an
+// edited one would say "edited" (tdesktop's `Data::Flag::Updated`).
+const makeUpdated = () => {
+  const updated = document.createElement('i');
+  updated.classList.add('time-edited', 'time-part');
+  _i18n(updated, 'Ephemeral.Updated');
+  return updated;
+};
+
+// * when the `message_primary_edited_date` app config flag is on, the edited badge is
+// * replaced by the actual edit time ("edited at HH:MM" / "edited on <date> at HH:MM")
+// * shown in place of the sent time — matches tdesktop's EditedPrimary behaviour.
+const isSameDay = (a: Date, b: Date) => {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+};
+
+const makeEditedTime = (sentDate: Date, editDate: Date) => {
+  const timeEl = formatTime(editDate);
+  const now = new Date();
+  if(isSameDay(sentDate, now) && isSameDay(editDate, now)) {
+    return i18n('EditedMessage.At', [timeEl]);
+  }
+
+  const dateEl = formatDate(editDate, {shortMonth: true});
+  return i18n('EditedMessage.On', [dateEl, timeEl]);
 };
 
 const makeEffect = (props: {
@@ -128,10 +169,12 @@ export const fireMessageEffect = ({e, isOut, element, middleware, scrollable, ef
     const {doc, thumb: fullThumb} = await getDocForEffect(availableEffect);
     if(!middleware()) return;
 
+    // * the effect flies from the message's side of the chat toward the middle; RTL swaps the sides
+    const isOnRight = !!isOut !== I18n.getIsRTL();
     const {animationDiv} = wrapStickerAnimation({
       doc,
       middleware,
-      side: isOut ? 'right' : 'left',
+      side: isOnRight ? 'right' : 'left',
       size: 240,
       target: element,
       play: true,
@@ -143,7 +186,7 @@ export const fireMessageEffect = ({e, isOut, element, middleware, scrollable, ef
       }
     });
 
-    if(isOut === false) {
+    if(isOut !== undefined && !isOnRight) {
       animationDiv.classList.add('reflect-x');
     }
   });
@@ -207,14 +250,49 @@ export namespace MessageRender {
     // let hasReactions: boolean;
 
     const fwdFrom = isMessage && message.fwd_from;
-    const time: HTMLElement = /* isSponsored ? undefined :  */makeTime(date, includeDate);
+
+    // * when enabled by app config, an edited message shows its actual edit time in place of the
+    // * sent time (and drops the separate "edited" badge) — but not when the footer is already
+    // * showing a forwarded/saved date (matches tdesktop's EditedPrimary && !ForwardedDate).
+    const editDate = isMessage && (message as Message.message).edit_date;
+    const editedPrimary = isMessage &&
+      !!useAppConfig().message_primary_edited_date &&
+      !!editDate &&
+      chatType !== ChatType.Scheduled &&
+      !(message as Message.message).pFlags.edit_hide &&
+      !(includeDate && !!fwdFrom);
+
+    const time: HTMLElement = /* isSponsored ? undefined :  */editedPrimary ?
+      makeEditedTime(date, new Date(editDate * 1000)) :
+      makeTime(date, includeDate);
+
+    let title = /* isSponsored ? undefined :  */getFullDate(new Date(message.date * 1000));
     if(isMessage) {
+      title += (message.edit_date && !message.pFlags.edit_hide ? `\nEdited: ${getFullDate(new Date(message.edit_date * 1000))}` : '') +
+        (fwdFrom ? `\nOriginal: ${getFullDate(new Date(fwdFrom.saved_date || fwdFrom.date * 1000))}` : '');
+
+      const messageMedia = message.media;
+      if(messageMedia?._ === 'messageMediaDice' && messageMedia.game_outcome) {
+        const span = document.createElement('span');
+        span.classList.add('time-dice');
+        span.textContent = formatNanoton(messageMedia.game_outcome.stake_ton_amount);
+
+        const icon = Icon('ton', 'time-icon', 'time-part');
+
+        args.push(span, icon);
+      }
+
       if(message.views) {
         const postViewsSpan = document.createElement('span');
         postViewsSpan.classList.add('post-views');
         postViewsSpan.textContent = formatNumber(message.views, 1);
 
-        const channelViews = Icon('channelviews', 'time-icon', 'time-part', 'time-icon-views');
+        const channelViews = Icon('channelviews_filled', 'time-icon', 'time-part', 'time-icon-views');
+
+        title += '\n' + I18n.format('ViewsTooltip', true, [numberThousandSplitter(message.views)]);
+        if(message.forwards) {
+          title += '\n' + I18n.format('SharesTooltip', true, [numberThousandSplitter(message.forwards)]);
+        }
 
         args.push(postViewsSpan, channelViews);
       }
@@ -228,12 +306,25 @@ export namespace MessageRender {
         args.push(span);
       }
 
-      if(message.edit_date && chatType !== ChatType.Scheduled && !message.pFlags.edit_hide) {
+      if(message.via_business_bot_id) {
+        const bot = apiManagerProxy.getUser(message.via_business_bot_id as UserId);
+        const botName = [bot?.first_name, bot?.last_name].filter(Boolean).join(' ') || bot?.username || 'Bot';
+        const span = document.createElement('span');
+        span.classList.add('time-post-author', 'time-business-bot');
+        span.title = I18n.format('ChatAutomation.ViaBotTooltip', true);
+        span.append(wrapEmojiText(botName));
+        span.insertAdjacentHTML('beforeend', '<span class="time-post-author-comma">,' + NBSP + '</span>');
+        args.push(span);
+      }
+
+      if(isAnchoredEphemeralMessage(message)) {
+        args.unshift(editedSpan = makeUpdated());
+      } else if(!editedPrimary && message.edit_date && chatType !== ChatType.Scheduled && !message.pFlags.edit_hide) {
         args.unshift(editedSpan = makeEdited());
       }
 
       if(chatType !== ChatType.Pinned && message.pFlags.pinned) {
-        const i = Icon('pinnedchat', 'time-icon', 'time-pinned', 'time-part');
+        const i = Icon('pinnedchat_filled', 'time-icon', 'time-pinned', 'time-part');
         args.unshift(i);
       }
 
@@ -247,7 +338,7 @@ export namespace MessageRender {
         inlineStars.classList.add('inline-stars', 'bubble-meta-inline-stars');
         inlineStars.append(
           numberThousandSplitterForStars(+message.paid_message_stars * Math.max(groupedMessagesCount || 0, 1)),
-          Icon('star')
+          Icon('star', 'inline-stars-icon')
         );
         args.push(inlineStars)
       }
@@ -265,14 +356,14 @@ export namespace MessageRender {
       args.push(sponsoredSpan = makeSponsored());
     } */
 
-    if(time) {
-      args.push(time);
+    let repeatSpan: HTMLElement;
+    if(isMessage && message.schedule_repeat_period) {
+      repeatSpan = makeScheduleRepeatPeriod(message.schedule_repeat_period);
+      args.push(repeatSpan);
     }
 
-    let title = /* isSponsored ? undefined :  */getFullDate(new Date(message.date * 1000));
-    if(isMessage) {
-      title += (message.edit_date && !message.pFlags.edit_hide ? `\nEdited: ${getFullDate(new Date(message.edit_date * 1000))}` : '') +
-        (fwdFrom ? `\nOriginal: ${getFullDate(new Date(fwdFrom.saved_date || fwdFrom.date * 1000))}` : '');
+    if(time) {
+      args.push(time);
     }
 
     const timeSpan = document.createElement('span');
@@ -286,7 +377,9 @@ export namespace MessageRender {
 
     let clonedArgs = args;
     if(editedSpan) {
-      clonedArgs[clonedArgs.indexOf(editedSpan)] = makeEdited();
+      clonedArgs[clonedArgs.indexOf(editedSpan)] = isAnchoredEphemeralMessage(message) ?
+        makeUpdated() :
+        makeEdited();
     }
     // if(sponsoredSpan) {
     //   clonedArgs[clonedArgs.indexOf(sponsoredSpan)] = makeSponsored();
@@ -296,6 +389,9 @@ export namespace MessageRender {
     //   _reactionsElement.init(reactionsMessage, 'inline');
     //   _reactionsElement.render();
     // }
+    if(repeatSpan) {
+      clonedArgs[clonedArgs.indexOf(repeatSpan)] = makeScheduleRepeatPeriod((message as Message.message).schedule_repeat_period);
+    }
     if(effectSpan) {
       clonedArgs[clonedArgs.indexOf(effectSpan)] = makeEffect({
         docId: (message as Message.message).effect,
@@ -312,7 +408,9 @@ export namespace MessageRender {
           a;
     });
     if(time) {
-      clonedArgs[clonedArgs.length - 1] = makeTime(date, includeDate); // clone time
+      clonedArgs[clonedArgs.length - 1] = editedPrimary ? // clone time
+        makeEditedTime(date, new Date(editDate * 1000)) :
+        makeTime(date, includeDate);
     }
     inner.append(...clonedArgs);
 
@@ -344,11 +442,12 @@ export namespace MessageRender {
     return isFooter;
   };
 
-  export const setReply = async({chat, bubble, bubbleContainer, message, appendCallback, middleware, lazyLoadQueue, needUpdate, isStandaloneMedia, isOut, fromUpdate}: {
+  export const setReply = async({chat, bubble, bubbleContainer, message, logId, appendCallback, middleware, lazyLoadQueue, needUpdate, isStandaloneMedia, isOut, fromUpdate}: {
     chat: Chat,
     bubble: HTMLElement,
     bubbleContainer?: HTMLElement,
     message: Message.message,
+    logId?: string | number,
     appendCallback?: (container: HTMLElement) => void,
     middleware: Middleware,
     lazyLoadQueue: LazyLoadQueue,
@@ -389,9 +488,9 @@ export namespace MessageRender {
 
     if(!fromUpdate) {
       if(isStoryReply) {
-        needUpdate.push(forUpdate = {replyToPeerId, replyStoryId: replyTo.story_id, mid: message.mid, peerId: message.peerId});
+        needUpdate.push(forUpdate = {replyToPeerId, replyStoryId: replyTo.story_id, mid: message.mid, peerId: message.peerId, logId});
       } else {
-        needUpdate.push(forUpdate = {replyToPeerId, replyMid: message.reply_to_mid, mid: message.mid, peerId: message.peerId});
+        needUpdate.push(forUpdate = {replyToPeerId, replyMid: message.reply_to_mid, mid: message.mid, peerId: message.peerId, logId});
       }
 
       middleware.onClean(() => {
@@ -425,6 +524,8 @@ export namespace MessageRender {
           plainText: false,
           fromName: getFwdFromName(replyTo.reply_from)
         }).element;
+      } else if(replyTo.reply_to_msg_deleted) {
+        originalPeerTitle = i18n('DeletedMessage');
       } else {
         // needUpdate.push(forUpdate = {replyToPeerId, replyMid: message.reply_to_mid, mid: message.mid, peerId: message.peerId});
         rootScope.managers.appMessagesManager.fetchMessageReplyTo(message);

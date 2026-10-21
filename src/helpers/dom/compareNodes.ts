@@ -1,12 +1,6 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import clamp from '../number/clamp';
-import findUpAsChild from './findUpAsChild';
-import whichChild from './whichChild';
+import clamp from '@helpers/number/clamp';
+import findUpAsChild from '@helpers/dom/findUpAsChild';
+import whichChild from '@helpers/dom/whichChild';
 
 export default function compareNodes(node1: ChildNode, node1Offset: number, node2: ChildNode, node2Offset: number) {
   let diff: number;

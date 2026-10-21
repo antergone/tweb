@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import SDPAttributeInner from './attributeInner';
-import SDPLine from './line';
+import SDPAttributeInner from '@lib/calls/sdp/attributeInner';
+import SDPLine from '@lib/calls/sdp/line';
 
 export default class SDPAttributes {
   #lines: SDPLine[];

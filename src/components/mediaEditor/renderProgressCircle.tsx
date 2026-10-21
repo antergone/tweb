@@ -1,73 +1,33 @@
-import {StandaloneSignal} from './types';
+import {createEffect, onCleanup, onMount, Signal} from 'solid-js';
+import PreloaderRing from '@components/preloaderRing';
+import classNames from '@helpers/string/classNames';
+import I18n from '@lib/langPack';
+import styles from '@components/mediaEditor/renderProgressCircle.module.scss';
 
-export default function RenderProgressCircle(props: {creationProgress: StandaloneSignal<number>}) {
-  const [progress] = props.creationProgress.signal;
-  // const [progress, setProgress] = createSignal(0); // Progress signal from 0 to 100
+// A video or a GIF being made: the ring of dots a download has, with the share done in its middle.
+// `fill`: over the whole of a small preview that is dimmed already, rather than a disc in its middle.
+export default function RenderProgressCircle(props: {creationProgress: Signal<number>, fill?: boolean}) {
+  const [progress] = props.creationProgress;
 
-  const radius = 52;
-  const strokeWidth = 6;
-  const circumference = 2 * Math.PI * radius;
-
-  const strokeDashoffset = () => circumference - progress() * circumference;
-
-  // createEffect(() => {
-  //   const interval = setInterval(() => {
-  //     setProgress((prev) => (prev < 100 ? prev + Math.floor(Math.random() * 10) : 0));
-  //   }, 120);
-  //   return () => clearInterval(interval);
-  // });
-
-  return (
+  let ringElement: HTMLDivElement;
+  const element = (
     <div
-      style={{
-        display: 'flex',
-        position: 'absolute',
-        left: '50%',
-        top: '50%',
-        transform: 'translate(-50%, -50%)',
-        width: '64px',
-        ...{
-          'background-color': 'rgba(0, 0, 0, .25)',
-          'border-radius': '64px',
-          'max-width': '80%',
-          'max-height': '80%',
-          'aspect-ratio': '1 / 1',
-          'z-index': 2
-        }
-      }}
+      class={classNames(styles.wrap, props.fill && styles.fill)}
+      role="progressbar"
+      aria-label={I18n.format('Loading', true)}
+      aria-valuenow={Math.round(progress() * 100)}
+      aria-valuemin={0}
+      aria-valuemax={100}
     >
-      <svg width="100%" height="100%" viewBox="0 0 120 120">
-        <circle
-          cx="60"
-          cy="60"
-          r={radius}
-          fill="none"
-          stroke="white"
-          stroke-width={strokeWidth + ''}
-          stroke-dasharray={circumference + ''}
-          stroke-dashoffset={strokeDashoffset()}
-          stroke-linecap="round"
-          style={{
-            // 'transition': 'stroke-dashoffset 0.12s',
-            'transform': 'rotate(-90deg)',
-            'transform-origin': '50% 50%'
-          }}
-        />
-
-        <text
-          x="50%"
-          y="50%"
-          dy=".3em"
-          text-anchor="middle"
-          style={{
-            'font-size': '30px',
-            'font-weight': 'bolder',
-            'fill': 'white'
-          }}
-        >
-          {(progress() * 100).toFixed(0)}%
-        </text>
-      </svg>
+      <div ref={ringElement} class={styles.ring} />
     </div>
   );
+
+  const ring = new PreloaderRing(ringElement, {percent: true});
+  createEffect(() => ring.setTarget(progress()));
+  // watched from the start: out of the document it waits to be put in
+  onMount(() => ring.onAttach());
+  onCleanup(() => ring.halt());
+
+  return element;
 }

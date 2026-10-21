@@ -1,12 +1,6 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import type LazyLoadQueue from './lazyLoadQueue';
-import {getMiddleware, Middleware, MiddlewareHelper} from '../helpers/middleware';
-import {avatarNew} from './avatarNew';
+import type LazyLoadQueue from '@components/lazyLoadQueue';
+import {getMiddleware, Middleware, MiddlewareHelper} from '@helpers/middleware';
+import {avatarNew} from '@components/avatarNew';
 import {createEffect, on, onCleanup} from 'solid-js';
 
 const CLASS_NAME = 'stacked-avatars';

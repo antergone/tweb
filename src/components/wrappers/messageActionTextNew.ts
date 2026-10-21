@@ -1,11 +1,5 @@
-/*
- * https://github.com/morethanwords/tweb
- * Copyright (C) 2019-2021 Eduard Kuzmenko
- * https://github.com/morethanwords/tweb/blob/master/LICENSE
- */
-
-import type {MyMessage} from '../../lib/appManagers/appMessagesManager';
-import wrapMessageActionTextNewUnsafe from './messageActionTextNewUnsafe';
+import type {MyMessage} from '@appManagers/appMessagesManager';
+import wrapMessageActionTextNewUnsafe from '@components/wrappers/messageActionTextNewUnsafe';
 
 export type WrapMessageActionTextOptions = {
   message: MyMessage,
