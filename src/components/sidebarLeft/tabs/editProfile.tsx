@@ -2,13 +2,7 @@ import {createEffect, createMemo, createResource, createSignal, JSX, on, onClean
 import {useSuperTab} from '@components/solidJsTabs/superTabProvider';
 import {usePromiseCollector} from '@components/solidJsTabs/promiseCollector';
 import {useHotReloadGuard} from '@lib/solidjs/hotReloadGuard';
-import {
-  AppBusinessHoursTab,
-  AppBusinessLocationTab,
-  AppChatAutomationTab,
-  openBusinessEditorTab,
-  type AppEditProfileTab
-} from '@components/solidJsTabs/tabs';
+import {type AppEditProfileTab} from '@components/solidJsTabs/tabs';
 import Section from '@components/section';
 import Row from '@components/rowTsx';
 import {InputFieldTsx} from '@components/inputFieldTsx';
@@ -16,7 +10,7 @@ import {i18n} from '@lib/langPack';
 import rootScope from '@lib/rootScope';
 import getPeerEditableUsername from '@appManagers/utils/peers/getPeerEditableUsername';
 import EditPeer from '@components/editPeer';
-import InputField from '@components/inputField';
+import InputField, {InputState} from '@components/inputField';
 import {UsernameInputField} from '@components/usernameInputField';
 import UsernamesSection from '@components/usernamesSection';
 import showBirthdayPopup, {saveMyBirthday} from '@components/popups/birthday';
@@ -24,12 +18,15 @@ import showPickUserPopup from '@components/popups/pickUser';
 import PopupElement from '@components/popups/indexTsx';
 import wrapPeerTitle from '@components/wrappers/peerTitle';
 import {toastNew} from '@components/toast';
+import toastError from '@components/toastError';
 import {attachClickEvent} from '@helpers/dom/clickEvent';
 import {purchaseUsernameCaption} from '@components/sidebarLeft/tabs/purchaseUsernameCaption';
 import {BusinessWorkHours, ConnectedBot, User, UserFull} from '@layer';
 import OpeningHours from '@helpers/openingHours';
 import {trackAvatarUpload} from '@stores/avatarUpload';
 import usePremium from '@stores/premium';
+import {hotReloadGuard} from '@lib/solidjs/hotReloadGuardProvider';
+import Modes from '@config/modes';
 
 type AppEditProfileTabType = typeof AppEditProfileTab;
 
@@ -225,7 +222,7 @@ const EditProfileForm = (props: {
       return;
     }
 
-    tab.slider.createTab(AppChatAutomationTab).open({connectedBot: connectedBot()});
+    tab.slider.createTab(hotReloadGuard.tabs.AppChatAutomationTab).open({connectedBot: connectedBot()});
   };
 
   const openPersonalChannelPicker = async() => {
@@ -282,8 +279,26 @@ const EditProfileForm = (props: {
       bioInputField.value
     ).then(() => {
       tab.close();
-    }, (err) => {
-      console.error('updateProfile error:', err);
+    }, (err: ApiError) => {
+      // * a field the server would not take turns red where it stands, as tdesktop shows it - a bio kept from Premium
+      // * is longer than the limit after it, and every field goes in the one request; any other refusal is said (but
+      // * not for a session the tab has left meanwhile - toastError keeps quiet then)
+      const field = ({
+        FIRSTNAME_INVALID: firstNameInputField,
+        LASTNAME_INVALID: lastNameInputField,
+        ABOUT_TOO_LONG: bioInputField
+      } as {[type: string]: InputField})[err?.type];
+      if(field) {
+        field.setError();
+        if(Modes.a11y) field.input.focus();
+        // * the first edit takes the refusal off, and the field's own checks (its length) run again after that
+        tab.listenerSetter.add(field.input)('input', () => {
+          field.setState(InputState.Neutral);
+          field.simulateInputEvent();
+        }, {once: true});
+      } else {
+        toastError(err, 'updateProfile error:');
+      }
     }));
 
     if(editPeer.uploadAvatar) {
@@ -408,7 +423,7 @@ const EditProfileForm = (props: {
         name="TelegramBusiness"
         caption={i18n(premium() ? 'TelegramBusinessSubscribedSubtitle' : 'TelegramBusinessSubtitle')}
       >
-        <Row clickable={() => openBusinessEditorTab(tab.slider, AppBusinessHoursTab)}>
+        <Row clickable={() => hotReloadGuard.tabs.openBusinessEditorTab(tab.slider, hotReloadGuard.tabs.AppBusinessHoursTab)}>
           <Row.Icon icon="time_filled" />
           <Row.Title
             titleRight={businessWorkHours() ? businessHoursSummary() : i18n('Off')}
@@ -417,7 +432,7 @@ const EditProfileForm = (props: {
             {i18n('BusinessHours')}
           </Row.Title>
         </Row>
-        <Row clickable={() => openBusinessEditorTab(tab.slider, AppBusinessLocationTab)}>
+        <Row clickable={() => hotReloadGuard.tabs.openBusinessEditorTab(tab.slider, hotReloadGuard.tabs.AppBusinessLocationTab)}>
           <Row.Icon icon="location_filled" />
           <Row.Title
             titleRight={businessLocation()?.address || i18n('Off')}
@@ -425,6 +440,14 @@ const EditProfileForm = (props: {
           >
             {i18n('BusinessLocation')}
           </Row.Title>
+        </Row>
+        <Row clickable={() => hotReloadGuard.tabs.openBusinessEditorTab(tab.slider, hotReloadGuard.tabs.AppBusinessChatLinksTab)}>
+          <Row.Icon icon="link_filled" />
+          <Row.Title>{i18n('PremiumBusinessChatLinks')}</Row.Title>
+        </Row>
+        <Row clickable={() => hotReloadGuard.tabs.openBusinessEditorTab(tab.slider, hotReloadGuard.tabs.AppBusinessIntroTab)}>
+          <Row.Icon icon="message_quote" />
+          <Row.Title>{i18n('PremiumBusinessIntro')}</Row.Title>
         </Row>
       </Section>
 

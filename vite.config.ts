@@ -10,15 +10,21 @@ import {resolve} from 'path';
 import {existsSync, copyFileSync, readFileSync, realpathSync} from 'fs';
 import {createHash} from 'crypto';
 import {Plugin, ServerOptions} from 'vite';
-import {watchLangFile} from './watch-lang.js';
-import {watchScssTypes} from './scss-types.js';
 import {vitestWorkers} from './scripts/testQueue';
 import devChecks from './scripts/dev-checks.mjs';
 import settingsSearchPlugin from './scripts/settings-search-plugin.mjs';
 import watchTransformCache from './scripts/watch-transform-cache.mjs';
+import hotReloadPlugin from './scripts/hot-reload-plugin.mjs';
 import path from 'path';
+import {createRequire} from 'module';
+import {fileURLToPath} from 'url';
 
-const rootDir = resolve(__dirname);
+// CommonJS, which a config evaluated as an ES module (`--configLoader runner`) cannot import
+const require = createRequire(import.meta.url);
+const {watchLangFile} = require('./watch-lang.js') as typeof import('./watch-lang.js');
+const {watchScssTypes} = require('./scss-types.js') as typeof import('./scss-types.js');
+
+const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const certsDir = path.join(rootDir, 'certs');
 const ENV_LOCAL_FILE_PATH = path.join(rootDir, '.env.local');
 const LANG_PACK_LOCAL_FILE_PATH = path.join(rootDir, 'src', 'langPackLocalVersion.ts');
@@ -217,6 +223,36 @@ function compileHintsPlugin(): Plugin {
   };
 }
 
+// Vite's preload helper waits for a lazy chunk's CSS with listeners it leaves on the <link> for good,
+// and makes them inside `__vitePreload`, so their closures hold its scope: the `() => import(...)`
+// it was called with, and through that whatever the caller's scope held — the first popup, tab or
+// menu to load each stylesheet stayed in memory with its whole DOM (~4k nodes in a short session).
+// The wait moves into a function of its own, whose listeners hold only the link and its URL.
+function preloadHelperCssWaitPlugin(): Plugin {
+  const waitRe = /new Promise\(\(res, rej\) => \{\s*link\.addEventListener\("load", res\);\s*link\.addEventListener\("error", \(\) => rej\([^;]*?\)\);\s*\}\)/;
+  return {
+    name: 'preload-helper-css-wait',
+    apply: 'build',
+    transform(code, id) {
+      if(!id.includes('vite/preload-helper')) return;
+      if(!waitRe.test(code)) {
+        throw new Error('preload-helper-css-wait: the CSS wait in Vite\'s preload helper changed, update the plugin');
+      }
+
+      return {
+        code: code.replace(waitRe, '__waitForPreloadedCss(link, dep)') + `
+function __waitForPreloadedCss(link, dep) {
+  return new Promise((res, rej) => {
+    link.addEventListener("load", res);
+    link.addEventListener("error", () => rej(new Error(\`Unable to preload CSS for \${dep}\`)));
+  });
+}`,
+        map: null
+      };
+    }
+  };
+}
+
 export default defineConfig({
   plugins: [
     // devtools({
@@ -226,9 +262,11 @@ export default defineConfig({
     process.env.VITEST || process.env.TWEB_PREVIEW ? undefined : devChecks(rootDir),
     process.env.VITEST ? undefined : settingsSearchPlugin(),
     watchTransformCache(),
+    hotReloadPlugin(),
     solidPlugin(),
     handlebarsPlugin as any,
     compileHintsPlugin(),
+    preloadHelperCssWaitPlugin(),
     USE_SELF_SIGNED_CERTS ? basicSsl(BASIC_SSL_CONFIG) : undefined,
     // Only emit the bundle treemap (stats.html) when explicitly analyzing (ANALYZE=1):
     // it adds build time and writes a ~1.3MB file that otherwise gets globbed into the

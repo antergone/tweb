@@ -26,6 +26,14 @@ defineStories('Premium & Stars', [
     }
   },
   {
+    id: 'limit/folderPin',
+    title: 'Limit reached — pinned chats in the archive',
+    open: async(ctx) => {
+      const {default: showLimitPopup} = await import('@components/popups/limit');
+      await showLimitPopup('folderPin');
+    }
+  },
+  {
     id: 'limit/channels',
     title: 'Limit reached — channels (with inactive-chat picker)',
     managers: {
@@ -104,3 +112,7 @@ defineStories('Premium & Stars', [
     }
   }
 ]);
+
+// The sandbox reloads on an edit anyway (watchForEdits). Accepting here keeps an edit of a popup this story imports
+// from climbing through the story to the app's root once the sandbox has been opened on the dev server.
+if(import.meta.hot) import.meta.hot.accept();

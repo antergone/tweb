@@ -11,6 +11,7 @@ import type {
 import type {ChatRights} from '@appManagers/appChatsManager';
 import PopupElement, {createPopup, PopupContext, PopupContextValue} from './indexTsx';
 import {toastNew} from '@components/toast';
+import setInnerHTML from '@helpers/dom/setInnerHTML';
 import SendContextMenu, {mountSendMenu} from '@components/chat/sendContextMenu';
 import {createPosterFromMedia, createPosterFromVideo} from '@helpers/createPoster';
 import {MyDocument} from '@appManagers/appDocsManager';
@@ -71,6 +72,7 @@ import {ChatType} from '@components/chat/chatType';
 import pause from '@helpers/schedulers/pause';
 import {Accessor, createMemo, createRoot, createSignal, onCleanup, onMount, Setter, Signal, useContext} from 'solid-js';
 import SelectedEffect from '@components/chat/selectedEffect';
+import {unwrapSolidElement} from '@helpers/solid/wrapSolidComponent';
 import showMakePaidPopup from '@components/popups/makePaid';
 import paymentsWrapCurrencyAmount from '@helpers/paymentsWrapCurrencyAmount';
 import Icon from '@components/icon';
@@ -193,6 +195,23 @@ export async function canSendNewMedia({peerId, onlyVisible, threadId}: {peerId?:
   return out;
 }
 
+/**
+ * A file of no bytes is left out, with the first such one named, as tdesktop does: nothing of it can be uploaded
+ * (the server takes no empty part)
+ */
+function dropEmptyFiles(files: File[]) {
+  const empty = files.find((file) => !file.size);
+  if(!empty) {
+    return files;
+  }
+
+  // * a name of either direction, kept apart from the sentence around it
+  const name = document.createElement('span');
+  setInnerHTML(name, empty.name);
+  toastNew({langPackKey: 'Attach.FileEmpty', langPackArguments: [name]});
+  return files.filter((file) => file.size);
+}
+
 export default function showNewMediaPopup(
   chat: Chat,
   inputFiles: (ConstructorInputFile | File)[],
@@ -271,7 +290,7 @@ export default function showNewMediaPopup(
     toastNew({langPackKey: 'Ephemeral.SingleAttachment'});
   }
 
-  const files: File[] = inputFiles.map((inputFile) => {
+  const files: File[] = dropEmptyFiles(inputFiles.map((inputFile) => {
     // The {file, editResult} wrapper is the only variant carrying a `file` field; everything else
     // is a plain File. Cross-realm-safe (a Document PiP window's File isn't `instanceof` the main File).
     if(!('file' in inputFile)) {
@@ -280,7 +299,12 @@ export default function showNewMediaPopup(
     const file = normalizeFileMimeType(inputFile.file);
     pendingEditResults.set(file, inputFile.editResult);
     return file;
-  });
+  }));
+
+  // * every file given was empty: there is nothing to send
+  if(inputFiles.length && !files.length) {
+    return;
+  }
 
   canConvertGifToVideo(); // warm up the memo for the sync reads
 
@@ -545,7 +569,7 @@ export default function showNewMediaPopup(
         const [effect, setEffect] = createSignal<DocId>(wasDraft?.effect);
         effectAccessor = effect;
         setEffectAccessor = setEffect;
-        btnConfirm.append(SelectedEffect({effect: effectAccessor}) as HTMLElement);
+        btnConfirm.append(unwrapSolidElement(SelectedEffect({effect: effectAccessor})) as HTMLElement);
       });
 
       const sendMenu = new SendContextMenu({
@@ -1012,6 +1036,11 @@ export default function showNewMediaPopup(
       files.splice(1);
       willAttach.sendFileDetails.splice(1);
       toastNew({langPackKey: 'Ephemeral.SingleAttachment'});
+    }
+
+    // * what the field it came from asks before a reply goes (Stealth Mode over a story)
+    if(!isEditing() && !(await input.isSendingConfirmed())) {
+      return;
     }
 
     const isSlowModeActive = () => input.showSlowModeTooltipIfNeeded({
@@ -1586,6 +1615,8 @@ export default function showNewMediaPopup(
             btnConfirm.disabled = true;
 
             const {openMediaEditorFromMedia} = await import('../mediaEditor');
+            // * the popup can be gone by the time the editor loads (closed, the account switched)
+            if(context.destroyed) return;
 
             isMediaEditorOpen = true;
             const mediaSrc = params.objectURLs.create(file);
@@ -2152,7 +2183,7 @@ export default function showNewMediaPopup(
   }
 
   function addFiles(newFiles: File[]) {
-    newFiles = newFiles.map(normalizeFileMimeType);
+    newFiles = dropEmptyFiles(newFiles.map(normalizeFileMimeType));
     if(richMessageInsert?.visualOnly) newFiles = newFiles.filter(isVisualRichMessageFile);
 
     if(!canHaveMultipleFiles() && files.length) {

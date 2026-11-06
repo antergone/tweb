@@ -12,8 +12,7 @@ import noop from '@helpers/noop';
 import {Message, MessageMedia, WebPage} from '@layer';
 import {MyDocument} from '@appManagers/appDocsManager';
 import appDownloadManager, {Progress} from '@lib/appDownloadManager';
-import appImManager from '@lib/appImManager';
-import {AppManagers} from '@lib/managers';
+import {ReadingManagers} from '@lib/managers';
 import getDownloadMediaDetails from '@appManagers/utils/download/getDownloadMediaDetails';
 import choosePhotoSize from '@appManagers/utils/photos/choosePhotoSize';
 import I18n, {joinElementsWith} from '@lib/langPack';
@@ -36,11 +35,12 @@ import wrapSenderToPeer from '@components/wrappers/senderToPeer';
 import wrapSentTime from '@components/wrappers/sentTime';
 import {Middleware} from '@helpers/middleware';
 import readBlobAsText from '@helpers/blob/readBlobAsText';
-import SolidJSHotReloadGuardProvider from '@lib/solidjs/hotReloadGuardProvider';
+import SolidJSHotReloadGuardProvider, {hotReloadGuard} from '@lib/solidjs/hotReloadGuardProvider';
 import {openMarkdownInstantView} from '@components/markdownInstantView';
 import isPlayableDocument from '@appManagers/utils/docs/isPlayableDocument';
+import {hotListen} from '@helpers/hotModule';
 
-rootScope.addEventListener('document_downloading', (docId) => {
+hotListen(import.meta.hot, rootScope, 'document_downloading', (docId) => {
   const elements = Array.from(document.querySelectorAll(`.document[data-doc-id="${docId}"]`)) as HTMLElement[];
   elements.forEach((element) => {
     if(element.querySelector('.preloader-container.manual')) {
@@ -87,7 +87,7 @@ export default async function wrapDocument({
   autoDownloadSize?: number,
   lazyLoadQueue?: LazyLoadQueue,
   sizeType?: MediaSizeType,
-  managers?: AppManagers,
+  managers?: ReadingManagers,
   cacheContext?: ThumbCache,
   fontSize?: number,
   getSize?: () => number,
@@ -170,8 +170,16 @@ export default async function wrapDocument({
 
   const canActivate = !(!uploadingFileName && message.pFlags.is_outgoing && !message.mid);
   const canOpen = canActivate && !draft;
+  // * what a click does with the file (`load` takes the same turns): a Markdown one opens in Instant View, a
+  // * medium the viewer plays is kept for the bubble to open it there, and any other is downloaded to the disk
+  const canSaveToCache = doc.size <= MAX_FILE_SAVE_SIZE;
+  const isMarkdown = (doc: MyDocument) => ext === 'md' || ext === 'markdown' || /^text\/(x-)?markdown\b/i.test(doc.mime_type || '');
+  const isViewable = (doc: MyDocument) => MEDIA_MIME_TYPES_SUPPORTED.has(doc.mime_type) && !!doc.thumbs?.length && canSaveToCache;
   const icoDiv = canOpen && Modes.a11y ? Button('', {noRipple: true}) : document.createElement('div');
-  if(canOpen && Modes.a11y) icoDiv.setAttribute('aria-label', I18n.format('AccDescr.OpenDocument', true, [doc.file_name || 'Unknown.file']));
+  if(canOpen && Modes.a11y) {
+    const opens = isMarkdown(doc) || isViewable(doc);
+    icoDiv.setAttribute('aria-label', I18n.format(opens ? 'AccDescr.OpenDocument' : 'AccDescr.DownloadDocument', true, [doc.file_name || 'Unknown.file']));
+  }
   icoDiv.classList.add('document-ico');
   let icoTextEl: HTMLElement;
 
@@ -256,7 +264,7 @@ export default async function wrapDocument({
   `;
 
   const nameDiv = docDiv.querySelector('.document-name') as HTMLElement;
-  const middleEllipsisEl = new MiddleEllipsisElement();
+  const middleEllipsisEl = MiddleEllipsisElement.create();
   middleEllipsisEl.dataset.fontWeight = '' + fontWeight;
   middleEllipsisEl.dataset.fontSize = '' + fontSize;
   middleEllipsisEl.dataset.sizeType = sizeType;
@@ -285,8 +293,6 @@ export default async function wrapDocument({
   if(!canActivate) {
     return docDiv;
   }
-
-  const canSaveToCache = doc.size <= MAX_FILE_SAVE_SIZE;
 
   let downloadDiv: HTMLElement, preloader: ProgressivePreloader = null;
   const onLoad = () => {
@@ -357,10 +363,10 @@ export default async function wrapDocument({
     const doc = (docDiv as any).doc;
     // const doc = await managers.appDocsManager.getDoc(docDiv.dataset.docId);
     let download: CancellablePromise<any>;
-    const queueId = appImManager.chat?.bubbles?.lazyLoadQueue.queueId;
+    const queueId = hotReloadGuard.appImManager.chat?.bubbles?.lazyLoadQueue.queueId;
     if(!save) {
       download = appDownloadManager.downloadToDisc({media: doc, queueId}, true);
-    } else if(ext === 'md' || ext === 'markdown' || /^text\/(x-)?markdown\b/i.test(doc.mime_type || '')) {
+    } else if(isMarkdown(doc)) {
       download = appDownloadManager.downloadMedia({media: doc, queueId});
       download.then(readBlobAsText).then((raw) => {
         openMarkdownInstantView({
@@ -379,11 +385,7 @@ export default async function wrapDocument({
           }, liteMode.isAvailable('animations') ? 250 : 0);
         });
       }
-    } else if(
-      MEDIA_MIME_TYPES_SUPPORTED.has(doc.mime_type) &&
-      doc.thumbs?.length &&
-      canSaveToCache
-    ) {
+    } else if(isViewable(doc)) {
       download = appDownloadManager.downloadMediaURL({media: doc, queueId});
     } else {
       download = appDownloadManager.downloadToDisc({media: doc, queueId});

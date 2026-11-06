@@ -19,7 +19,7 @@ import setWorkerProxy from '@helpers/setWorkerProxy';
 import toggleAttributePolyfill from '@helpers/dom/toggleAttributePolyfill';
 import rootScope from '@lib/rootScope';
 import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
-import I18n, {checkLangPackForUpdates, i18n, LangPackKey} from '@lib/langPack';
+import I18n, {checkLangPackForUpdates} from '@lib/langPack';
 import '@helpers/peerIdPolyfill';
 import '@lib/polyfill';
 import '@lib/debug/mountLogExport'; // main-thread-only: wires window.downloadLogs / collectLogs
@@ -40,6 +40,7 @@ import cacheInstallPrompt from '@helpers/dom/installPrompt';
 import {fillLocalizedDates} from '@helpers/date';
 import {nextRandomUint} from '@helpers/random';
 import {createEffect} from 'solid-js';
+import {setHotReloadGuardLoader} from '@lib/solidjs/hotReloadGuardProvider';
 import {IS_OVERLAY_SCROLL_SUPPORTED, USE_CUSTOM_SCROLL, USE_NATIVE_SCROLL} from '@environment/overlayScrollSupport';
 import IMAGE_MIME_TYPES_SUPPORTED, {IMAGE_MIME_TYPES_SUPPORTED_PROMISE} from '@environment/imageMimeTypesSupport';
 import MEDIA_MIME_TYPES_SUPPORTED from '@environment/mediaMimeTypesSupport';
@@ -47,13 +48,14 @@ import {doubleRaf} from '@helpers/schedulers';
 import {getCurrentAccount} from '@lib/accounts/getCurrentAccount';
 import AccountController from '@lib/accounts/accountController';
 import {changeAccount} from '@lib/accounts/changeAccount';
+import {getValidatedAccount} from '@lib/accounts/getValidatedAccount';
 import {MAX_ACCOUNTS_FREE, MAX_ACCOUNTS_PREMIUM} from '@lib/accounts/constants';
 import sessionStorage from '@lib/sessionStorage';
 import replaceChildrenPolyfill from '@helpers/dom/replaceChildrenPolyfill';
 import listenForWindowPrint from '@helpers/dom/windowPrint';
 import cancelImageEvents from '@helpers/dom/cancelImageEvents';
 import listenForLinkPress from '@helpers/dom/linkPress';
-import PopupElement, {createPopup} from '@components/popups/indexTsx';
+import {DeactivatedScreen, onStartImportFailed, showDeactivatedScreen} from '@/pages/deactivatedScreen';
 import PasscodeLockScreenController from '@components/passcodeLock/passcodeLockScreenController'; PasscodeLockScreenController;
 import commonStateStorage from '@lib/commonStateStorage';
 import {useAppSettings, setAppSettingsSilent} from '@stores/appSettings';
@@ -86,7 +88,8 @@ IMAGE_MIME_TYPES_SUPPORTED_PROMISE.then((mimeTypes) => {
   apiManagerProxy.sendEnvironment();
 });
 
-// * Randomly choose a version if user came from a search engine
+// * Randomly choose a version if user came from a search engine, and keep it. The choice is Web A's key as
+// * well, kept as JSON: a choice made in either version stays
 function randomlyChooseVersionFromSearch() {
   try {
     if(
@@ -97,12 +100,22 @@ function randomlyChooseVersionFromSearch() {
       const version = localStorage.getItem('kz_version');
       if(version === 'Z' || nextRandomUint(8) > 127) {
         localStorage.setItem('kz_version', 'Z');
-        location.href = 'https://tg.simonmy.com/';
+        appNavigationController.navigateToUrl('https://tg.simonmy.com/');
       } else {
-        localStorage.setItem('kz_version', 'K');
+        localStorage.setItem('kz_version', JSON.stringify('K'));
       }
     }
   } catch(err) {}
+}
+
+function getPermanentWebVersion() {
+  const value = localStorage.getItem('kz_version');
+  try {
+    return JSON.parse(value);
+  } catch(err) {
+    // * as an older K wrote it
+    return value;
+  }
 }
 
 async function checkLastActiveAccountFromTMe() {
@@ -352,11 +365,7 @@ function onInstanceDeactivated(reason: InstanceDeactivateReason) {
 
   const onOtherClientClick = onTabsClick;
 
-  const map: {[key in InstanceDeactivateReason]: {
-    title: LangPackKey,
-    subtitle: LangPackKey,
-    onClick: () => void
-  }} = {
+  const map: {[key in InstanceDeactivateReason]: DeactivatedScreen} = {
     version: {
       title: 'Deactivated.Version.Title',
       subtitle: 'Deactivated.Version.Subtitle',
@@ -374,27 +383,23 @@ function onInstanceDeactivated(reason: InstanceDeactivateReason) {
     }
   };
 
-  document.body.classList.add('deactivated');
-
-  const header = document.createElement('div');
-  header.classList.add('header');
-  header.append(i18n(map[reason].title));
-
-  const subtitle = document.createElement('div');
-  subtitle.classList.add('subtitle');
-  subtitle.append(i18n(map[reason].subtitle));
-
-  // the entry file is plain .ts, so the popup is composed by calling the component
-  createPopup(() => PopupElement({
-    class: 'popup-instance-deactivated',
-    containerClass: 'instance-deactivated-container',
-    closable: true,
-    onClose: map[reason].onClick,
-    children: [header, subtitle]
-  }));
+  showDeactivatedScreen(map[reason]);
 };
 
 const TIME_LABEL = 'Elapsed time since unlocked';
+
+/**
+ * The test servers have accounts and chats of their own (Modes.test, `?test=1`), and nothing else on the screen tells
+ * them from the real ones: the corner says so for as long as the page runs on them, the sign-in screens too. Here and
+ * not in a module of its own, which would be one more module whose edit reloads the page (importGraphBudget).
+ */
+function mountTestDcBadge() {
+  const badge = document.createElement('div');
+  badge.classList.add('test-dc-badge');
+  badge.dir = 'ltr';
+  badge.textContent = 'Test DC';
+  document.body.append(badge);
+}
 
 (window as any)['showIconLibrary'] = async() => {
   const {showIconLibrary} = await import('./components/iconLibrary/trigger');
@@ -403,12 +408,23 @@ const TIME_LABEL = 'Elapsed time since unlocked';
 
 // The popup sandbox, over a running app (`?popups=1` boots straight into it instead). The bare
 // `import.meta.env.DEV` is deliberate: only a `false` literal at the call site makes rolldown drop
-// the dynamic import before chunking. The authorized preview is a dev server, so it is covered.
-if(import.meta.env.DEV) {
+// the dynamic import before chunking. The authorized preview is a dev server, so it is covered, and
+// the bundle it builds for a remote device (`VITE_PREVIEW`, a literal too) keeps both sandboxes for
+// Settings → Experimental; a production build has neither.
+if(import.meta.env.DEV || import.meta.env.VITE_PREVIEW) {
   (window as any)['showPopupSandbox'] = async() => {
     const {showPopupSandbox} = await import('@components/popupSandbox');
     await showPopupSandbox();
   };
+
+  // the bubbles of the open chat, put in any state by click: the module, once loaded, puts its own opener in place of
+  // this one (`@components/bubbleSandbox`)
+  const loadBubbleSandbox = async() => {
+    await import('@components/bubbleSandbox');
+    const show = (window as any)['showBubbleSandbox'];
+    if(show !== loadBubbleSandbox) show();
+  };
+  (window as any)['showBubbleSandbox'] = loadBubbleSandbox;
 }
 
 /* false &&  */document.addEventListener('DOMContentLoaded', async() => {
@@ -424,6 +440,7 @@ if(import.meta.env.DEV) {
   cancelImageEvents();
   listenForLinkPress();
   setRootClasses();
+  if(Modes.test) mountTestDcBadge();
 
   // ?popups=1 — the popup sandbox: every popup, opened by click with mock data and no session.
   // It has to take over here, before the session is restored and the auth flow starts.
@@ -438,6 +455,10 @@ if(import.meta.env.DEV) {
     await startPopupSandbox();
     return;
   }
+
+  // the media editor the sign-up screen opens for the new account's photo mounts the app's top level, which nothing
+  // has loaded yet then
+  setHotReloadGuardLoader(() => import('./pages/bootstrapIm').then(({importAppTopLevel}) => importAppTopLevel()));
 
   rootScope.managers = getProxiedManagers();
   await checkLastActiveAccountFromTMe();
@@ -533,7 +554,7 @@ if(import.meta.env.DEV) {
   themeController.setThemeListener();
 
   // * fetch lang pack updates
-  if((langPack.localVersion !== App.langPackLocalVersion || true) && IS_BETA) {
+  if((langPack.localVersion !== I18n.getLocalVersion() || true) && IS_BETA) {
     I18n.getLangPackAndApply(langPack.lang_code);
   } else {
     checkLangPackForUpdates();
@@ -611,14 +632,24 @@ if(import.meta.env.DEV) {
     console.log('Will mount auth page:', authState._, Date.now() / 1000);
 
     (async() => {
-      const totalAccounts = await AccountController.getTotalAccounts();
+      const [accountNumbers, freeAccountNumber] = await Promise.all([
+        AccountController.getAccountNumbers(),
+        AccountController.getFreeAccountNumber()
+      ]);
       const hasSomeonePremium = await apiManagerProxy.hasSomeonePremium();
       const maxAccountNumber = hasSomeonePremium ? MAX_ACCOUNTS_PREMIUM : MAX_ACCOUNTS_FREE;
 
       const currentAccount = getCurrentAccount();
+      // * the first slot is left empty when Web A signs its account out, with its other accounts still there:
+      // * the tab goes on to them with the link it was opened by, unless that link signs in here
+      const isEmptyFirstSlot = currentAccount === 1 && !!accountNumbers.length && authState._ !== 'authStateSignImport';
+      const canSignInHere = currentAccount === freeAccountNumber &&
+        accountNumbers.length < maxAccountNumber &&
+        !isEmptyFirstSlot;
 
-      if(currentAccount > Math.min(maxAccountNumber, totalAccounts + 1)) {
-        changeAccount(1);
+      const accountNumber = accountNumbers[0] ?? freeAccountNumber ?? 1;
+      if(!canSignInHere && accountNumber !== currentAccount) {
+        changeAccount(accountNumber, false, isEmptyFirstSlot);
       }
     })();
 
@@ -634,8 +665,22 @@ if(import.meta.env.DEV) {
 
     }
 
-    const {mountAuthFlow} = await import('./pages/mountAuthFlow');
-    mountAuthFlow(authState);
+    const {mountAuthFlow} = await import('./pages/mountAuthFlow').catch(onStartImportFailed);
+    const accountNumber = getCurrentAccount();
+    mountAuthFlow(authState, {
+      accountNumber,
+      managers: rootScope.managers,
+      // * a page opened on a slot of its own to add an account goes back to the account it was added from
+      back: accountNumber !== 1 ? async(host) => {
+        await sessionStorage.set({should_animate_main: 1});
+        const previousAccount = getValidatedAccount(await sessionStorage.get('previous_account'));
+        await sessionStorage.delete('previous_account');
+        await host.leave();
+        changeAccount(previousAccount);
+      } : undefined,
+      toIm: () => import('./pages/bootstrapIm').catch(onStartImportFailed).then(({bootstrapIm}) => bootstrapIm()),
+      openAccount: (accountNumber) => changeAccount(accountNumber)
+    });
   } else {
     console.log('Will mount IM page:', Date.now() / 1000);
 
@@ -643,7 +688,7 @@ if(import.meta.env.DEV) {
     fadeInWhenFontsReady(document.getElementById('main-columns'), fontsPromise);
 
     const [{bootstrapIm}, shouldAnimate] = await Promise.all([
-      import('./pages/bootstrapIm'),
+      import('./pages/bootstrapIm').catch(onStartImportFailed),
       sessionStorage.get('should_animate_main')
     ]);
 

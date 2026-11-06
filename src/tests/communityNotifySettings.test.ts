@@ -303,7 +303,8 @@ describe('community pinned dialog order', () => {
         invokeApiSingleProcess: vi.fn(({processResult}) => Promise.resolve(processResult(response)))
       },
       appCommunitiesManager: communitiesManager,
-      appDraftsManager: {addMissedDialogs: vi.fn()},
+      appDraftsManager: {addMissedDialogs: vi.fn(), getDraftsClock: () => 0},
+      appNotificationsManager: {getSettingsClock: () => 0},
       appPeersManager: {getInputPeerById: vi.fn()},
       dialogsStorage: storage,
       log,
@@ -420,6 +421,8 @@ describe('community pinned dialog order', () => {
       appMessagesManager: {
         getChannelAvailableMinIdGeneration
       },
+      appNotificationsManager: {getSettingsClock: () => 0},
+      appDraftsManager: {getDraftsClock: () => 0},
       appPeersManager: {
         getPeerId: (peer: Dialog.dialog['peer']) => {
           return peer._ === 'peerUser' ?
@@ -525,6 +528,8 @@ describe('community pinned dialog order', () => {
       appMessagesManager: {
         getChannelAvailableMinIdGeneration
       },
+      appNotificationsManager: {getSettingsClock: () => 0},
+      appDraftsManager: {getDraftsClock: () => 0},
       appPeersManager: {
         getPeerId: (peer: Dialog.dialog['peer']) => {
           return peer._ === 'peerUser' ?

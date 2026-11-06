@@ -28,6 +28,7 @@ const TLOTTIE_WASM_URL = new URL(
 export type LottieAssetName =
   | 'BusinessHours'
   | 'BusinessLocation'
+  | 'BusinessLinks'
   | 'EmptyFolder'
   | 'Folders_1'
   | 'Folders_2'
@@ -73,6 +74,10 @@ export type LottieAssetName =
   | 'hand_stop'
   | 'collectible_username'
   | 'collectible_phone'
+  | 'Experimental'
+  | 'Gram'
+  | 'WalletWordList'
+  | 'WalletWordCheck'
 ;
 
 /**
@@ -402,6 +407,9 @@ export class LottieLoader {
   }
 }
 
+// made once: a hot update keeps it and moves it onto the edited class (see @helpers/hotRegistry)
 const lottieLoader = new LottieLoader();
 MOUNT_CLASS_TO.lottieLoader = lottieLoader;
 export default lottieLoader;
+
+if(import.meta.hot) import.meta.hot.accept();

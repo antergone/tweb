@@ -117,6 +117,19 @@ defineStories('Chat & moderation', [
     }
   },
   {
+    id: 'report/profilePhoto',
+    title: 'Report a profile photo',
+    fixtureOnly: true,
+    managers: {
+      appProfileManager: {reportProfilePhoto: () => true}
+    },
+    open: async(ctx) => {
+      const {showProfilePhotoReport} = await import('@components/popups/reportAd');
+      // * the photo goes no further than the report, which the sandbox answers
+      showProfilePhotoReport(ctx.peer('private'), 'sandbox-photo', 'ReportProfilePhotoTitle');
+    }
+  },
+  {
     id: 'joinChatInvite',
     title: 'Join a chat by invite link',
     open: async(ctx) => {
@@ -308,3 +321,7 @@ defineStories('Chat & moderation', [
     }
   }
 ]);
+
+// The sandbox reloads on an edit anyway (watchForEdits). Accepting here keeps an edit of a popup this story imports
+// from climbing through the story to the app's root once the sandbox has been opened on the dev server.
+if(import.meta.hot) import.meta.hot.accept();

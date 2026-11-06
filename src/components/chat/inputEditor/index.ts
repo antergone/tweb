@@ -11,7 +11,8 @@ import {
   Plugin,
   Selection,
   TextSelection,
-  Transaction
+  Transaction,
+  type SelectionRange
 } from '@tiptap/pm/state';
 import {CellSelection, TableMap, cellAround} from '@tiptap/pm/tables';
 import type {EditorView} from '@tiptap/pm/view';
@@ -21,7 +22,7 @@ import {
   instantViewStyles
 } from '@components/instantViewFormatting';
 import getRichValueWithCaret from '@helpers/dom/getRichValueWithCaret';
-import {handleMarkdownShortcut} from '@helpers/dom/markdown';
+import {handleMarkdownShortcut, isEditorShortcutModifier} from '@helpers/dom/markdown';
 import type {MarkdownType} from '@helpers/dom/getRichElementValue';
 import classNames from '@helpers/string/classNames';
 import type {Document, MessageEntity, PageBlock, Photo, RichMessage, RichText} from '@layer';
@@ -49,6 +50,7 @@ import {
   ChatInputRichMediaUploadUpdateEvent
 } from '@components/chat/inputEditor/events';
 import runHistoryCommandPreservingSelection from '@components/chat/inputEditor/history';
+import setInlineBotPlaceholder from '@components/chat/inputEditor/inlineBotPlaceholder';
 import {
   handleEmptyParagraphBackspaceAfterRichMedia,
   handleRichMediaCaptionBackspace,
@@ -62,7 +64,7 @@ import {
 } from '@components/chat/inputEditor/richMedia';
 import {richMessageToPlainMessage, type DocumentRowBlock} from '@lib/richMessage';
 import {RICH_MEDIA_ACTION_SETTLED_META} from '@components/chat/inputEditor/mediaUploadHistory';
-import {richReplacementSlice, selectedRichContent, withCopiedOrderedListStarts} from '@components/chat/inputEditor/selectionSlice';
+import {copiedRange, richReplacementSlice, selectedRichContent, withCopiedOrderedListStarts} from '@components/chat/inputEditor/selectionSlice';
 import {
   clampSelectionOutsideTrailingPlaceholder,
   entitiesFittingPlainMessage,
@@ -231,10 +233,10 @@ function insertedContent(document: JSONContent, parentType?: string) {
   return blocks;
 }
 
-function inlineSelectionDocument(state: EditorState) {
+function inlineSelectionDocument(state: EditorState, range?: SelectionRange) {
   const {selection, schema} = state;
-  if(!(selection instanceof TextSelection)) return;
-  const {$from, $to} = selection;
+  if(!range && !(selection instanceof TextSelection)) return;
+  const {$from, $to} = range || selection;
   if(!$from.sameParent($to) || !$from.parent.isTextblock) return;
   const parent = $from.parent;
   const code = parent.type.name === 'codeBlock';
@@ -383,8 +385,10 @@ function selectedTableClipboardNode(view: EditorView) {
     schema.nodes.table.create(null, content);
 }
 
-function transformCopiedContent(slice: Slice, view: EditorView) {
-  let transformed = slice;
+function transformCopiedContent(slice: Slice, view: EditorView, moving: boolean) {
+  const {selection, doc} = view.state;
+  const range = moving ? undefined : copiedRange(selection);
+  let transformed = range ? doc.slice(range.$from.pos, range.$to.pos, true) : slice;
   if(view.state.selection instanceof CellSelection) {
     const tablePosition = view.state.selection.$anchorCell.start(-1) - 1;
     const descriptor = getChatInputTableSelection(view.state, tablePosition);
@@ -401,7 +405,7 @@ function transformCopiedContent(slice: Slice, view: EditorView) {
   if(!(view.state.selection instanceof CellSelection)) {
     transformed = inlineCopiedSoleParagraph(transformed, view);
   }
-  return replaceChatTableClipboardEmojiNodes(withCopiedOrderedListStarts(transformed, view.state.selection));
+  return replaceChatTableClipboardEmojiNodes(withCopiedOrderedListStarts(transformed, range || selection));
 }
 
 function pasteClosedSingleParagraphInline(
@@ -1362,6 +1366,8 @@ class TiptapChatInputEditor implements ChatInputEditor {
   private pendingScrollTargetPosition: number;
   private customEmojiPointer: CustomEmojiPointerState;
   private structuralDoubleClickSelection: StructuralDoubleClickSelection;
+  // a cut or a drag under way: it moves what it takes out (`startMove`)
+  private moving = false;
   private unregister: () => void;
   private destroyed = false;
   private caretPlaced = false;
@@ -1398,6 +1404,17 @@ class TiptapChatInputEditor implements ChatInputEditor {
     const appWindow = pointer.view.dom.ownerDocument.defaultView;
     appWindow.removeEventListener('mousemove', this.onCustomEmojiMouseMove, true);
     appWindow.removeEventListener('mouseup', this.onCustomEmojiMouseUp, true);
+  }
+
+  /**
+   * A cut or a drag moves what it takes out, so it carries the whole selection — the opening of a
+   * line it ends at the start of too — and put back where it was, that is as it was. Only a copy
+   * takes the lines alone (`copiedRange`). For the event under way: ProseMirror serializes it next.
+   */
+  private startMove() {
+    this.moving = true;
+    queueMicrotask(() => this.moving = false);
+    return false;
   }
 
   private clearCustomEmojiPointer() {
@@ -1574,30 +1591,6 @@ class TiptapChatInputEditor implements ChatInputEditor {
     .run();
   }
 
-  private applyMonospaceShortcut() {
-    if(!this.supportsMarkup('monospace')) return false;
-    const {selection} = this.editor.state;
-    const {$from, $to} = selection;
-    for(let depth = $from.depth; depth > 0; --depth) {
-      if($from.node(depth).type.name !== 'codeBlock') continue;
-      return this.editor.chain().focus().toggleCodeBlock().run();
-    }
-
-    const currentBlock = $from.parent;
-    if(
-      $from.sameParent($to) &&
-      (currentBlock.type.name === 'paragraph' || currentBlock.type.name === 'heading')
-    ) {
-      // a one-line field has no code block to turn the line into
-      if(this.getMarkupState('monospace').fully || !this.editor.schema.nodes.codeBlock) {
-        return this.applyMarkup({type: 'monospace'});
-      }
-      return this.editor.chain().focus().setCodeBlock().run();
-    }
-
-    return this.applyMarkup({type: 'monospace'});
-  }
-
   constructor(
     input: HTMLElement,
     private options: ChatInputEditorOptions = {},
@@ -1650,15 +1643,18 @@ class TiptapChatInputEditor implements ChatInputEditor {
           const table = selectedTableClipboardNode(this.editor.view);
           if(table) return serializeChatTableClipboardText(Fragment.from(table));
 
-          const inline = inlineSelectionDocument(this.editor.state);
+          const range = this.moving ? undefined : copiedRange(selection);
+          const inline = inlineSelectionDocument(this.editor.state, range);
           if(inline) return tiptapToTelegram(inline).text;
           const serialized = tiptapToTelegram(this.editor.state.doc, this.trailingPlaceholder, {forClipboard: true});
+          const {$from, $to} = range || selection;
           return serialized.text.slice(
-            serialized.textOffsetAtPosition(selection.from, 'backward'),
-            serialized.textOffsetAtPosition(selection.to, 'forward')
+            serialized.textOffsetAtPosition($from.pos, 'backward'),
+            // after a block taken whole (`copiedRange`), not the break after it
+            $to.parent.inlineContent ? serialized.textOffsetAtPosition($to.pos, 'forward') : serialized.textEndBefore($to.pos)
           );
         },
-        transformCopied: transformCopiedContent,
+        transformCopied: (slice, view) => transformCopiedContent(slice, view, this.moving),
         handleTextInput: (view, from, to, text) => {
           if(convertTypedChecklistMarker(view, from, to, text)) return true;
           if(startBlockMarkerLine(view, from, to, text)) return true;
@@ -1691,6 +1687,8 @@ class TiptapChatInputEditor implements ChatInputEditor {
           return true;
         },
         handleDOMEvents: {
+          cut: () => this.startMove(),
+          dragstart: () => this.startMove(),
           beforeinput: (view, event) => {
             const deletionKey = event.inputType === 'deleteContentBackward' ? 'Backspace' :
               event.inputType === 'deleteContentForward' ? 'Delete' : undefined;
@@ -1882,42 +1880,14 @@ class TiptapChatInputEditor implements ChatInputEditor {
               this.remappingNewLineShortcut = false;
             }
           }
-          const mod = event.ctrlKey || event.metaKey;
-          if(mod && event.altKey && !event.shiftKey) {
-            const level = event.code === 'Digit1' ? 1 :
-              event.code === 'Digit2' ? 2 :
-              undefined;
-            if(level) {
-              event.preventDefault();
-              return this.toggleHeading(level as 1 | 2);
-            }
+          // The browser's and the system's keys stay theirs: what is taken here is Ctrl (Cmd on a Mac) and a
+          // letter alone, and only where it does something — a field without links leaves Ctrl+K to the
+          // browser's search
+          if(event.code === 'KeyK' && isEditorShortcutModifier(event) && this.requestLinkEditor()) {
+            event.preventDefault();
+            return true;
           }
-          if(mod && !event.altKey) {
-            const code = event.code;
-            if(!event.shiftKey && code === 'KeyK') {
-              event.preventDefault();
-              return this.requestLinkEditor();
-            }
-            if(event.shiftKey && code === 'KeyH') {
-              event.preventDefault();
-              return this.toggleHeading(2);
-            }
-            if(event.shiftKey && code === 'KeyT') {
-              event.preventDefault();
-              return this.insertTable();
-            }
-            if(event.shiftKey && code === 'KeyB') {
-              event.preventDefault();
-              return this.setBodyText();
-            }
-            if(!event.shiftKey && code === 'KeyM') {
-              event.preventDefault();
-              return this.applyMonospaceShortcut();
-            }
-          }
-          if(event.ctrlKey || event.metaKey) {
-            handleMarkdownShortcut(input, event);
-          }
+          handleMarkdownShortcut(input, event);
           return event.defaultPrevented;
         },
         handlePaste: (view, event, slice) => {
@@ -3627,6 +3597,10 @@ class TiptapChatInputEditor implements ChatInputEditor {
       return toggle(resolved.before(depth), details);
     }
     return false;
+  }
+
+  public setInlineBotPlaceholder(placeholder?: string) {
+    setInlineBotPlaceholder(this.editor, placeholder);
   }
 
   public setContent(content: string | Node) {

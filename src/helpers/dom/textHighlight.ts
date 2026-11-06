@@ -14,7 +14,7 @@
  *
  * - default: the CSS Custom Highlight API — ranges registered under a global `Highlight`
  *   (`CSS.highlights`) and styled by `::highlight(<name>)` rules (see
- *   `scss/partials/_textHighlight.scss`). Nothing is inserted into the DOM, but browsers paint
+ *   `helpers/dom/textHighlight.scss`). Nothing is inserted into the text DOM, but browsers paint
  *   only glyph-high boxes, which leaves gaps between wrapped lines;
  * - `lineBoxes`: an absolutely positioned overlay inside the container with one box per line,
  *   stretched to the full line height — a contiguous block like a text selection. Needs a
@@ -30,6 +30,8 @@ import {animateValue} from '@helpers/animateValue';
 import liteMode from '@helpers/liteMode';
 import throttleWithRaf from '@helpers/schedulers/throttleWithRaf';
 import escapeRegExp from '@helpers/string/escapeRegExp';
+import {hotEffect} from '@helpers/hotModule';
+import highlightCss from '@helpers/dom/textHighlight.scss?inline';
 
 export type TextHighlightMatch = {
   /** server-search-like: case-insensitive, every query word matched at a word start */
@@ -131,6 +133,12 @@ export function getTextSkip(skip?: string) {
   return skip ? `${DEFAULT_SKIP}, ${skip}` : DEFAULT_SKIP;
 }
 
+// a formula, drawn as MathML, stands for its source (`Latex`)
+const getMathSource = (element: HTMLElement) => {
+  const {dataset} = element;
+  return ('inlineMath' in dataset || 'blockMath' in dataset) && dataset.source;
+};
+
 /**
  * collects the visible text of `root` together with the DOM positions it came from; `sourceText`
  * reads an element drawn otherwise than the text it stands for (a date in local time) as that text
@@ -164,8 +172,8 @@ export function extractText(root: HTMLElement, skip = DEFAULT_SKIP, {sourceText}
     }
 
     // * emoji images and custom emoji carry their text as `alt` / `data-sticker-emoji`
-    // * (same convention as `getRichElementValue`)
-    const alt = (sourceText && element.dataset.originalText) ||
+    // * (same convention as `getRichElementValue`), a formula its source as `data-source`
+    const alt = (sourceText && (element.dataset.originalText || getMathSource(element))) ||
       element.dataset.stickerEmoji ||
       (element as HTMLImageElement).alt;
     if(alt) {
@@ -262,8 +270,8 @@ function findNearest(text: string, needle: string, hint: number): TextSpan | und
 /**
  * The quote is a verbatim slice of the message text, `offset` is where it started there. The
  * rendered text may differ slightly (dropped line breaks around block quotes, media captions
- * preceded by a file name …), hence the nearest occurrence to the offset and a
- * whitespace-insensitive retry.
+ * preceded by a file name, an emoji completed by its variation selector …), hence the occurrence
+ * nearest to the offset, of the exact text or of the text whitespace and variation selectors aside.
  */
 export function findQuoteSpan(text: string, quote: string, offset = 0): TextSpan | undefined {
   if(!quote || !text) {
@@ -271,16 +279,18 @@ export function findQuoteSpan(text: string, quote: string, offset = 0): TextSpan
   }
 
   const exact = findNearest(text, quote, offset);
-  if(exact) {
-    return exact;
-  }
+  const loose = findLooseQuoteSpan(text, quote, offset);
+  // * the one nearer to where the quote started: an exact one elsewhere is another place of the same text
+  return exact && loose && Math.abs(loose[0] - offset) < Math.abs(exact[0] - offset) ? loose : exact ?? loose;
+}
 
-  const needle = quote.replace(/\s+/g, '');
+function findLooseQuoteSpan(text: string, quote: string, offset: number): TextSpan | undefined {
+  const needle = quote.replace(/[\s\ufe0f]+/g, '');
   if(!needle) {
     return;
   }
 
-  // * strip all whitespace, remembering where every kept character came from
+  // * strip all whitespace and variation selectors, remembering where every kept character came from
   const map: number[] = [];
   let stripped = '';
   let strippedHint = 0;
@@ -289,7 +299,7 @@ export function findQuoteSpan(text: string, quote: string, offset = 0): TextSpan
       strippedHint = stripped.length;
     }
 
-    if(!/\s/.test(text[i])) {
+    if(!/[\s\ufe0f]/.test(text[i])) {
       map.push(i);
       stripped += text[i];
     }
@@ -314,7 +324,9 @@ export function findSpans(text: string, match: TextHighlightMatch): TextSpan[] {
 
 /** turns text spans into DOM ranges over the container's text */
 export function computeRanges(container: HTMLElement, match: TextHighlightMatch, skip?: string) {
-  const {text, segments} = extractText(container, getTextSkip(skip));
+  // * a quote is a slice of the message's text: what is drawn otherwise (a date in local time, a formula) is found as
+  // * the text it stands for
+  const {text, segments} = extractText(container, getTextSkip(skip), {sourceText: match.type === 'quote'});
   const ranges: Range[] = [];
   if(!segments.length) {
     return ranges;
@@ -362,9 +374,10 @@ export function findTextRect(container: HTMLElement, match: TextHighlightMatch, 
 /**
  * Turns the ranges' fragment rects into per-line boxes stretched to the line height (glyph rects
  * are only font-high; the missing half-leading is added on both sides), unioned along a line
- * and expressed relative to `origin`.
+ * and expressed relative to `origin`, in its own pixels: `scale` is how much bigger the screen
+ * shows them (an ancestor scaled - a bubble zooming in as its chat opens).
  */
-export function computeLineBoxes(ranges: Range[], origin: DOMRect, lineHeight: number): TextLineBox[] {
+export function computeLineBoxes(ranges: Range[], origin: DOMRect, lineHeight: number, scale = {x: 1, y: 1}): TextLineBox[] {
   type Edges = {left: number, right: number, top: number, bottom: number};
   const fragments: Edges[] = [];
   for(const range of ranges) {
@@ -373,8 +386,14 @@ export function computeLineBoxes(ranges: Range[], origin: DOMRect, lineHeight: n
         continue;
       }
 
-      const extra = Math.max(0, lineHeight - rect.height) / 2;
-      fragments.push({left: rect.left, right: rect.right, top: rect.top - extra, bottom: rect.bottom + extra});
+      const top = (rect.top - origin.top) / scale.y, bottom = (rect.bottom - origin.top) / scale.y;
+      const extra = Math.max(0, lineHeight - (bottom - top)) / 2;
+      fragments.push({
+        left: (rect.left - origin.left) / scale.x,
+        right: (rect.right - origin.left) / scale.x,
+        top: top - extra,
+        bottom: bottom + extra
+      });
     }
   }
 
@@ -410,8 +429,8 @@ export function computeLineBoxes(ranges: Range[], origin: DOMRect, lineHeight: n
   }
 
   return boxes.map((box) => ({
-    left: box.left - origin.left,
-    top: box.top - origin.top,
+    left: box.left,
+    top: box.top,
     width: box.right - box.left,
     height: box.bottom - box.top
   }));
@@ -465,21 +484,78 @@ export function computeNarrowing(full: TextLineBox[], targets: TextLineBox[]) {
   return {ends, extra: targets.filter((target) => !claimed.has(target))};
 }
 
+const registryHighlights = new Map<TextHighlightMatch['type'], Highlight>();
+let highlightStyle: HTMLStyleElement;
+let styleRemovalQueued = false;
+
 function getRegistryHighlight(type: TextHighlightMatch['type']) {
-  const name = HIGHLIGHT_NAMES[type];
-  let highlight = CSS.highlights.get(name);
+  let highlight = registryHighlights.get(type);
   if(!highlight) {
     highlight = new Highlight();
     highlight.priority = HIGHLIGHT_PRIORITIES[type];
-    CSS.highlights.set(name, highlight);
+    registryHighlights.set(type, highlight);
   }
 
   return highlight;
 }
 
+function hasCssRanges() {
+  for(const highlight of registryHighlights.values()) {
+    if(highlight.size) return true;
+  }
+  return false;
+}
+
+function syncCssHighlights() {
+  for(const [type, highlight] of registryHighlights) {
+    const name = HIGHLIGHT_NAMES[type];
+    if(highlight.size) {
+      if(CSS.highlights.get(name) !== highlight) CSS.highlights.set(name, highlight);
+    } else if(CSS.highlights.get(name) === highlight) {
+      CSS.highlights.delete(name);
+    }
+  }
+
+  if(hasCssRanges()) {
+    if(!highlightStyle) {
+      highlightStyle = document.createElement('style');
+      highlightStyle.dataset.textHighlight = '';
+    }
+    if(highlightStyle.textContent !== highlightCss) highlightStyle.textContent = highlightCss;
+    if(!highlightStyle.isConnected) document.head.append(highlightStyle);
+  } else if(highlightStyle?.isConnected && !styleRemovalQueued) {
+    // Replacing a query commonly disposes the previous handle before creating the next one.
+    // Keep the same sheet for that transaction; remove it before paint if no new match replaced it.
+    styleRemovalQueued = true;
+    queueMicrotask(() => {
+      styleRemovalQueued = false;
+      if(!hasCssRanges()) highlightStyle?.remove();
+    });
+  }
+}
+
+// HMR retains the ranges and their owners; refresh only their CSS, without adding a second sheet.
+hotEffect(import.meta.hot, () => {
+  syncCssHighlights();
+  return () => highlightStyle?.remove();
+});
+
 // * every live highlight, so the ones whose container silently left the document (a cleared
 // * search list, an ejected bubble) can be released without a hook at each call site
 const instances = new Set<TextHighlighter>();
+
+/**
+ * Finds the text of every highlight inside `root` again. Its ranges collapse when an ancestor of its container
+ * is moved to another parent (rows put in from a list built aside, held in a look-alike of what they were in),
+ * and the container's own observer sees nothing of that: whoever moves highlighted rows calls this after
+ */
+export function reapplyTextHighlights(root: Node) {
+  for(const instance of instances) {
+    if(root.contains(instance.container)) {
+      instance.apply();
+    }
+  }
+}
 const SWEEP_INTERVAL = 30e3;
 // * a container may be detached only briefly (virtual lists reattach rows) — give it time
 const DETACHED_GRACE = 10e3;
@@ -595,7 +671,7 @@ class TextHighlighter implements TextHighlight {
     this.found = false;
   }
 
-  private apply() {
+  public apply() {
     if(this.disposed) {
       return;
     }
@@ -610,7 +686,7 @@ class TextHighlighter implements TextHighlight {
       for(const range of this.ranges) {
         this.highlight.add(range);
       }
-
+      syncCssHighlights();
       return;
     }
 
@@ -639,8 +715,14 @@ class TextHighlighter implements TextHighlight {
   }
 
   private computeLineBoxes(ranges: Range[]) {
+    const {overlay} = this;
     const lineHeight = parseFloat(getComputedStyle(this.container).lineHeight) || 0;
-    return computeLineBoxes(ranges, this.overlay.getBoundingClientRect(), lineHeight);
+    const origin = overlay.getBoundingClientRect();
+    // * the rects are the screen's, the boxes are painted inside the overlay: a scaled ancestor (a bubble zooming in)
+    // * is taken out — the transform changes no size, and nothing would measure them again once it is over
+    const {width, height} = getComputedStyle(overlay);
+    const scale = {x: origin.width / parseFloat(width) || 1, y: origin.height / parseFloat(height) || 1};
+    return computeLineBoxes(ranges, origin, lineHeight, scale);
   }
 
   private createLineBox(box: TextLineBox) {
@@ -743,6 +825,7 @@ class TextHighlighter implements TextHighlight {
 
     this.disposed = true;
     this.clearRanges();
+    if(this.highlight) syncCssHighlights();
     this.clearIntro();
     this.stopObserving();
     this.cancelFade?.();

@@ -108,6 +108,45 @@ defineStories('Pickers', [
     }
   },
   {
+    id: 'requestPeer/groups',
+    title: 'Pick groups for a bot that joins them',
+    managers: {
+      appUsersManager: {getCommonChats: () => ({_: 'messages.chats', chats: []})}
+    },
+    open: async(ctx) => {
+      const {default: selectRequestPeers} = await import('@components/popups/requestPeer');
+      selectRequestPeers({
+        button: {
+          _: 'buttonTypeRequestPeer',
+          button_id: 1,
+          max_quantity: 2,
+          peer_type: {_: 'requestPeerTypeChat', pFlags: {bot_participant: true}}
+        },
+        requestingPeerId: ctx.peer('bot')
+      }).catch(noop);
+    }
+  },
+  {
+    id: 'requestPeer/channelAdmin',
+    title: 'Pick a channel for a bot that asks to be its admin',
+    open: async(ctx) => {
+      const {default: selectRequestPeers} = await import('@components/popups/requestPeer');
+      selectRequestPeers({
+        button: {
+          _: 'buttonTypeRequestPeer',
+          button_id: 1,
+          max_quantity: 1,
+          peer_type: {
+            _: 'requestPeerTypeBroadcast',
+            pFlags: {},
+            bot_admin_rights: {_: 'chatAdminRights', pFlags: {post_messages: true, edit_messages: true}}
+          }
+        },
+        requestingPeerId: ctx.peer('bot')
+      }).catch(noop);
+    }
+  },
+  {
     id: 'pickCountry',
     title: 'Country picker',
     open: async(ctx) => {
@@ -177,6 +216,22 @@ defineStories('Pickers', [
     }
   },
   {
+    id: 'forward/story',
+    title: 'Share a story',
+    managers: {
+      appStoriesManager: {getStoryLink: () => 'https://t.me/telegram/s/1'}
+    },
+    open: async(ctx) => {
+      const {default: showForwardPopup} = await import('@components/popups/forward');
+      const peerId = ctx.peer('channel');
+      await showForwardPopup(undefined, undefined, undefined, undefined, {
+        peerId,
+        id: 1,
+        canCopyLink: true
+      });
+    }
+  },
+  {
     id: 'shareUrl',
     title: 'Share a link',
     open: async(ctx) => {
@@ -207,3 +262,7 @@ defineStories('Pickers', [
     }
   }
 ]);
+
+// The sandbox reloads on an edit anyway (watchForEdits). Accepting here keeps an edit of a popup this story imports
+// from climbing through the story to the app's root once the sandbox has been opened on the dev server.
+if(import.meta.hot) import.meta.hot.accept();

@@ -8,6 +8,7 @@ import rootScope from '@lib/rootScope';
 import deferredPromise from '@helpers/cancellablePromise';
 import {PAYMENT_REJECTED} from '@components/chat/paidMessagesInterceptor';
 import type {DraftMessage, Message, MessageEntity, RichMessage} from '@layer';
+import type {AppManagers} from '@lib/managers';
 
 vi.mock('@lib/appImManager', () => ({AppImManager: class {}, APP_TABS: {}, default: {}}));
 
@@ -47,6 +48,7 @@ function setup(partial = false) {
     getPlaceholderParams: vi.fn(async(_editing: boolean) => ({key: 'Message' as const})),
     setMessageInputEditable: vi.fn((editable: boolean) => {}),
     updateMessageInputPlaceholder: vi.fn(() => ({oldKey: 'Message', oldArgs: []})),
+    updateKeyboardPlaceholder: vi.fn(),
     editMsgId: undefined as number,
     editMessage: undefined as Message.message,
     restoreInputLock: undefined as (() => void),
@@ -216,7 +218,7 @@ function setupSending() {
   const options: Parameters<typeof ChatInput.sendMessageWithForward>[0] = {
     sendingParams: {peerId: 42 as PeerId},
     chatType: ChatType.Chat,
-    slowModeParams: {peerId: 42 as PeerId, managers: rootScope.managers, element: document.createElement('div')},
+    slowModeParams: {peerId: 42 as PeerId, managers: managers as unknown as AppManagers, element: document.createElement('div')},
     paidMessageInterceptor: {prepareStarsForPayment: pay} as unknown as Parameters<typeof ChatInput.sendMessageWithForward>[0]['paidMessageInterceptor']
   };
   return {

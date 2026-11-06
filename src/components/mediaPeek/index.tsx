@@ -24,7 +24,7 @@ import classNames from '@helpers/string/classNames';
 import windowSize from '@helpers/windowSize';
 import {Message, MessageMedia, PhotoSize} from '@layer';
 import canSeeMessageMedia from '@appManagers/utils/messages/canSeeMessageMedia';
-import getMediaFromMessage from '@appManagers/utils/messages/getMediaFromMessage';
+import getMediaFromMessage, {getMediaFromMessageOrRich} from '@appManagers/utils/messages/getMediaFromMessage';
 import choosePhotoSize from '@appManagers/utils/photos/choosePhotoSize';
 import getStickerEffectThumb from '@appManagers/utils/stickers/getStickerEffectThumb';
 import wrapEmojiText from '@lib/richTextProcessor/wrapEmojiText';
@@ -140,19 +140,30 @@ export async function getMediaPeekDocSource(element: HTMLElement): Promise<Media
  * What a message shows in its media slot, if a peek can show it: not a self-destructing one, not one
  * still being sent, not a paid one not yet bought. `index` picks an item of a paid album
  */
-export function getMessageMediaPeekSource(message: Message, index?: number): MediaPeekSource {
-  if(message?._ !== 'message' || message.pFlags.is_outgoing || !canSeeMessageMedia(message)) {
+export function getMessageMediaPeekSource(message: Message, index?: number, orRich?: boolean): MediaPeekSource {
+  if(message?._ !== 'message' || message.pFlags.is_outgoing) {
     return;
   }
 
-  // * only bought items have a media of their own: the rest are previews, made up from a stripped
-  // * thumbnail by getMediaFromMessage
-  const extendedMedia = (message.media as MessageMedia.messageMediaPaidMedia).extended_media;
-  if(extendedMedia && toArray(extendedMedia)[index ?? 0]?._ !== 'messageExtendedMedia') {
-    return;
+  let media: MediaPeekSource['media'];
+  if(orRich && !message.media && message.rich_message) {
+    // * a rich message has no media of its own: the shared media show it by the photo or video it stands for
+    media = getMediaFromMessageOrRich(message, index);
+  } else {
+    if(!canSeeMessageMedia(message)) {
+      return;
+    }
+
+    // * only bought items have a media of their own: the rest are previews, made up from a stripped
+    // * thumbnail by getMediaFromMessage
+    const extendedMedia = (message.media as MessageMedia.messageMediaPaidMedia).extended_media;
+    if(extendedMedia && toArray(extendedMedia)[index ?? 0]?._ !== 'messageExtendedMedia') {
+      return;
+    }
+
+    media = getMediaFromMessage(message, true, index);
   }
 
-  const media = getMediaFromMessage(message, true, index);
   return getMediaPeekKind(media) ? {media} : undefined;
 }
 
@@ -167,8 +178,16 @@ function getEntryLayout(kind: MediaPeekKind, media: MediaPeekSource['media'], re
     return {box: size, size, shift: 0};
   }
 
-  const hasEffect = kind === 'sticker' && !!getStickerEffectThumb(media as MyDocument);
-  const side = hasEffect ? 280 : (kind === 'gif' ? Math.min(480, windowHeight - 200) : 360);
+  if(kind === 'gif') {
+    const side = Math.min(480, windowWidth - MEDIA_MARGIN * 2, windowHeight - 200);
+    const box = makeMediaSize(side, side);
+    // * in its own shape, grown to fill the box: a GIF is mostly smaller than the box, and at its own
+    // * size it came out no bigger than where it was pressed. A square cell's crop grows into it whole
+    return {box, size: (getMediaDimensions(media) || box).aspect(box, false), shift: 0};
+  }
+
+  const hasEffect = !!getStickerEffectThumb(media as MyDocument);
+  const side = hasEffect ? 280 : 360;
   const box = makeMediaSize(side, side);
   const dimensions = rect.width !== rect.height && getMediaDimensions(media);
   return {

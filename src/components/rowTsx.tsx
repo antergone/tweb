@@ -316,7 +316,10 @@ Row.Row = (props: {
   leftRef?: Ref<HTMLDivElement>,
   rightRef?: Ref<HTMLDivElement>
 }) => {
-  const part = (
+  // * the left part is made in whichever branch shows it: one node put into both, alone and beside a right part,
+  // * was moved into the new branch before the old one was taken out, and Solid lost it — a title vanished as soon
+  // * as its right part arrived
+  const part = () => (
     <Row.RowPart
       elementRef={props.leftRef}
       class={classNames(props.class, props.additionalClass)}
@@ -325,9 +328,9 @@ Row.Row = (props: {
   );
   const resolved = children(() => props.right);
   return (
-    <Show when={!!props.rightRef || !!resolved()} fallback={part}>
+    <Show when={!!props.rightRef || !!resolved()} fallback={part()}>
       <div class={classNames('row-row', `row-${props.class}-row`, props.rowClass)}>
-        {part}
+        {part()}
         <Row.RowPart
           elementRef={props.rightRef}
           class={classNames(
@@ -418,6 +421,7 @@ Row.Subtitle = (props: {
 
 Row.Icon = (props: {
   icon: Icon,
+  text?: string,
   class?: string,
   noBackground?: boolean
 }) => {
@@ -433,7 +437,9 @@ Row.Icon = (props: {
         'background-image': getRowIconBackgroundImage(props.icon)
       }}
     >
-      <IconTsx icon={props.icon} class="row-icon-icon" />
+      {props.text ?
+        <span aria-hidden="true" class="row-icon-text">{props.text}</span> :
+        <IconTsx icon={props.icon} class="row-icon-icon" />}
     </span>
   ));
 };

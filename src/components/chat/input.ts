@@ -3,16 +3,16 @@ import type {RichMediaUploadServices} from '@components/richMessageInput/media';
 import createAiEditorContext from '@components/chat/inputState/createAiEditorContext';
 import type {MyDocument} from '@appManagers/appDocsManager';
 import getDocumentInput from '@appManagers/utils/docs/getDocumentInput';
+import sliceMessageEntities from '@helpers/sliceMessageEntities';
 import type {MyDraftMessage} from '@appManagers/appDraftsManager';
 import type {AppMessagesManager, MessageSendingParams, MyMessage, SuggestedPostPayload} from '@appManagers/appMessagesManager';
 import type Chat from '@components/chat/chat';
-import {AppImManager, APP_TABS} from '@lib/appImManager';
+import type {AppImManager} from '@lib/appImManager';
 import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
 import Modes from '@config/modes';
 import ChatRecording from '@components/chat/recording/chatRecording';
 import {ButtonMenuItemOptions, ButtonMenuItemOptionsVerifiable, ButtonMenuSync} from '@components/buttonMenu';
 import emoticonsDropdown, {EmoticonsDropdown} from '@components/emoticonsDropdown';
-import showForwardPopup from '@components/popups/forward';
 import showNewMediaPopup, {getCurrentNewMediaPopup} from '@components/popups/newMedia';
 import {toast, toastNew} from '@components/toast';
 import {
@@ -31,10 +31,11 @@ import {
   Dialog,
   TextWithEntities,
   GlobalPrivacySettings,
-  RichMessage
+  RichMessage,
+  InputMedia
 } from '@layer';
 import StickersHelper from '@components/chat/stickersHelper';
-import ChatInputPlate from '@components/chat/controlPlate';
+import ChatInputPlate, {CHAT_INPUT_PLATE_SINGLE_CLASS} from '@components/chat/controlPlate';
 import showSendGiftPopup from '@components/popups/sendGift';
 import ButtonIcon from '@components/buttonIcon';
 import ButtonMenuToggle from '@components/buttonMenuToggle';
@@ -45,6 +46,7 @@ import SendMenu from '@components/chat/sendContextMenu';
 import rootScope from '@lib/rootScope';
 import showPinMessagePopup from '@components/popups/unpinMessage';
 import tsNow from '@helpers/tsNow';
+import noop from '@helpers/noop';
 import mediaSizes from '@helpers/mediaSizes';
 import appNavigationController, {NavigationItem} from '@components/appNavigationController';
 import {IS_MOBILE, IS_MOBILE_SAFARI} from '@environment/userAgent';
@@ -132,6 +134,7 @@ import {
 import IMAGE_MIME_TYPES_SUPPORTED from '@environment/imageMimeTypesSupport';
 import VIDEO_MIME_TYPES_SUPPORTED from '@environment/videoMimeTypesSupport';
 import {ChatRights} from '@appManagers/appChatsManager';
+import {POSTING_NOT_ALLOWED_MAP} from '@components/chat/postingNotAllowedMap';
 import getPeerActiveUsernames from '@appManagers/utils/peers/getPeerActiveUsernames';
 import getChatMembershipAction from '@appManagers/utils/chats/getChatMembershipAction';
 import replaceContent from '@helpers/dom/replaceContent';
@@ -146,7 +149,6 @@ import {setBadgeCount} from '@helpers/setBadgeContent';
 import createBadge from '@helpers/createBadge';
 import deepEqual from '@helpers/object/deepEqual';
 import MarkupTooltip from '@components/chat/markupTooltip';
-import showPremiumPopup from '@components/popups/premium';
 import {showReplyPickerPopup} from '@components/popups/pickUser';
 import getPeerId from '@appManagers/utils/peers/getPeerId';
 import {isSavedDialog} from '@appManagers/utils/dialogs/isDialog';
@@ -155,7 +157,7 @@ import apiManagerProxy from '@lib/apiManagerProxy';
 import showTooltip from '@components/tooltip';
 import createContextMenu from '@helpers/dom/createContextMenu';
 import {Accessor, createComponent, createEffect, createRoot, createSignal, Setter} from 'solid-js';
-import {wrapSolidComponent} from '@helpers/solid/wrapSolidComponent';
+import {unwrapSolidElement, wrapSolidComponent} from '@helpers/solid/wrapSolidComponent';
 import SelectedEffect from '@components/chat/selectedEffect';
 import windowSize from '@helpers/windowSize';
 import {numberThousandSplitterForStars} from '@helpers/number/numberThousandSplitter';
@@ -164,12 +166,12 @@ import splitStringByLength from '@helpers/string/splitStringByLength';
 import PaidMessagesInterceptor, {PAYMENT_REJECTED} from '@components/chat/paidMessagesInterceptor';
 import asyncThrottle from '@helpers/schedulers/asyncThrottle';
 import focusInput from '@helpers/dom/focusInput';
+import {setDirection} from '@helpers/dom/setInnerHTML';
 import showChecklistPopup from '@components/popups/checklist';
 import assumeType from '@helpers/assumeType';
 import {formatFullSentTime} from '@helpers/date';
 import useStars from '@stores/stars';
-import showStarsPopup from '@components/popups/stars';
-import SolidJSHotReloadGuardProvider from '@lib/solidjs/hotReloadGuardProvider';
+import SolidJSHotReloadGuardProvider, {hotReloadGuard} from '@lib/solidjs/hotReloadGuardProvider';
 import {makeMessageMediaInputForSuggestedPost} from '@appManagers/utils/messages/makeMessageMediaInput';
 import showFrozenPopup from '@components/popups/frozen';
 import {wrapAsyncClickHandler} from '@helpers/wrapAsyncClickHandler';
@@ -189,7 +191,8 @@ import {getChatInputEditor} from './inputEditor/registry';
 import canSafelyEditRichMessage from './inputEditor/richMessageEditability';
 import {getAttachRichMediaTarget, RichMediaItemInsertAction} from '@components/chat/inputEditor/mediaPaste';
 import {entitiesFittingPlainMessage} from '@components/chat/inputEditor/model';
-import {richMessageToPlainMessage} from '@lib/richMessage';
+import {getInputReplyQuote, richMessageToPlainMessage} from '@lib/richMessage';
+import {getReplyQuote} from '@lib/richQuote';
 import {canShowAttachMenuAction} from '@components/chat/inputEditor/attachMenuPolicy';
 import type {RichMessageAttachMenuAction} from '@components/chat/inputEditor/attachMenuPolicy';
 import {getRichMessageMediaRequiredRight} from '@helpers/files/richMessageMediaInsertPolicy';
@@ -204,6 +207,10 @@ import generatePremiumIcon from '@components/generatePremiumIcon';
 import deriveEditorDraftContent from '@components/chat/inputEditor/draftContent';
 import captureInputContent from '@components/chat/inputEditor/captureInputContent';
 import getRichMessagePostingChoice from '@components/chat/inputEditor/richMessagePostingChoice';
+import {APP_TABS} from '@lib/appColumns';
+import verifyMenuItem from '@helpers/verifyMenuItem';
+import {isWalletAvailable, isWalletReleased} from '@lib/wallet/release';
+import toastError from '@components/toastError';
 
 const HOT_CHAT_INPUTS = import.meta.hot ? [] as ChatInput[] : null;
 let botCommandsListId = 0;
@@ -243,27 +250,14 @@ if(import.meta.hot) {
 
 const REPLY_IN_TOPIC = false;
 
-export const POSTING_NOT_ALLOWED_MAP: {[action in ChatRights]?: LangPackKey} = {
-  send_audios: 'GlobalAttachAudioRestricted',
-  send_docs: 'GlobalAttachDocumentsRestricted',
-  send_photos: 'GlobalAttachPhotoRestricted',
-  send_videos: 'GlobalAttachVideoRestricted',
-  send_voices: 'GlobalAttachVoiceRestricted',
-  send_stickers: 'GlobalAttachStickersRestricted',
-  send_gifs: 'GlobalAttachGifRestricted',
-  send_media: 'GlobalAttachMediaRestricted',
-  send_plain: 'GlobalSendMessageRestricted',
-  send_polls: 'ErrorSendRestrictedPollsAll',
-  send_inline: 'GlobalAttachInlineRestricted'
-};
-
 type ChatInputHelperType = 'edit' | 'webpage' | 'forward' | 'reply' | 'suggested';
 
 type ChatSendBtnIcon = 'send' | 'record' | 'record-video' | 'edit' | 'schedule' | 'forward' | 'stop';
 /** what one send goes with, besides the field: Send Without Sound, Schedule Message */
 type SendingFlags = Pick<ChatInput, 'scheduleDate' | 'scheduleRepeatPeriod' | 'sendSilent'>;
 /** a message that left the field as it went, until the draft clears its send asks for are back (`takeOwnDraftUpdate`) */
-type OwnSend = {clears: number, until: number};
+// * `saveRevision`: the field's saves as the send left it - a save after it is of the next message, not of the clear
+type OwnSend = {clears: number, until: number, saveRevision: number};
 /** how long an own send's draft clears are waited for */
 const OWN_DRAFT_CLEAR_TIMEOUT = 30e3;
 type ChatInputAttachMenuButton = ButtonMenuItemOptionsVerifiable & {
@@ -337,7 +331,7 @@ export default class ChatInput {
       canInsertMap: async() => {
         if(!await this.managers.appMessagesManager.isRichMessageMapAvailable()) return false;
         if(rootScope.premium) return true;
-        showPremiumPopup();
+        hotReloadGuard.showPremiumPopup();
         return false;
       },
       getPremiumRequired: async() => {
@@ -360,10 +354,17 @@ export default class ChatInput {
       onInput: this.onMessageInput,
       onHeightChange: (height) => {this.messageInputNaturalHeight = height; this.notifyChatInputHeight();},
       onExpandedChange: (expanded) => {
-        if(!expanded) return;
+        if(!expanded) {
+          // * once the field has shrunk back, if it does (`canShowReplyKeyboard`, `onResizeEnd`)
+          this.replyKeyboard?.resume();
+          return;
+        }
+
         this.emoticonsDropdown?.toggle(false);
+        this.replyKeyboard?.suspend();
         this.autocompleteHelperController?.hideOtherHelpers();
       },
+      onResizeEnd: () => this.replyKeyboard?.resume(),
       onReadOnlyClick: () => toastNew({langPackKey: this.chat.isTemporaryThread ? 'WaitForTopicCreation' : POSTING_NOT_ALLOWED_MAP.send_plain}),
       onChooseMedia: (selection, action) => {void this.onAttachClick(false, true, true, selection, false, action);},
       ref: (field) => {this.richMessageInput = field; this.messageInput = field.input;}
@@ -461,6 +462,8 @@ export default class ChatInput {
   public webPageOptions: Parameters<AppMessagesManager['sendText']>[0]['webPageOptions'] = {};
   /** @internal — used by ChatRecording */
   public forwarding: {[fromPeerId: PeerId]: number[]};
+  /** the second the forwarded video starts at ("Share at 0:42") */
+  public forwardingVideoTimestamp: number;
   private forwardingHasProtectedRichMessages = false;
   public replyToMsgId: MessageSendingParams['replyToMsgId'];
   public replyToStoryId: MessageSendingParams['replyToStoryId'];
@@ -476,7 +479,14 @@ export default class ChatInput {
   private sendingMessage: Promise<void>;
   /** messages that left the field whose draft clears have not come back yet */
   private ownSends: OwnSend[] = [];
+  /**
+   * The field's draft as the server has it, as far as the field knows: set as a draft from there fills the field and
+   * as a save of the field's own goes through, dropped as one goes out. A draft from elsewhere takes only a field that
+   * still holds it (`canTakeDraftFromElsewhere`)
+   */
   private appliedInputDraft?: {value?: DraftMessage.draftMessage};
+  /** counts the field's saves: one gone out while a draft from elsewhere waited is newer than that draft */
+  private draftSaveRevision = 0;
   private noWebPage: true;
   public scheduleDate: number;
   public scheduleRepeatPeriod: number;
@@ -491,6 +501,10 @@ export default class ChatInput {
   // collaborator (extracted from ChatInput). The `recording` getter below
   // forwards to it.
   private recordingController: ChatRecording;
+  // * a tap on the field is taking focus away on its way to give it back (`attachMessageInputListeners`)
+  private blurringByTap = false;
+  // * the saved draft on its way back into the field, as the chat opens (`updateMessageInput`)
+  private draftRestoring: Promise<unknown>;
 
   // private scrollTop = 0;
   // private scrollOffsetTop = 0;
@@ -513,6 +527,8 @@ export default class ChatInput {
   // * lowercased usernames known to be guest bots (bot_guestchat). a leading @guestbot in the
   // * composer is a plain, sendable message, not an inline query — this cache keeps typing flicker-free
   private knownGuestBots: Set<string> = new Set();
+  // * the inline query asked for last: only its end, whichever way it ends, stops the composer's spinner
+  private inlineQueryGeneration = 0;
   /** @internal — used by ChatRecording */
   public listenerSetter: ListenerSetter;
   private middlewareHelper: MiddlewareHelper;
@@ -555,6 +571,7 @@ export default class ChatInput {
   private channelMuteBtn: HTMLButtonElement;
   private directControlBtn: HTMLButtonElement;
   private giftControlBtn: HTMLButtonElement;
+  private controlPlate: HTMLElement;
   private rowsWrapperWrapper: HTMLDivElement;
   private controlContainer: HTMLElement;
   private fakeSelectionWrapper: HTMLDivElement;
@@ -586,10 +603,11 @@ export default class ChatInput {
   private peerChanging: boolean;
   public onFocusChange: (isFocused: boolean) => void;
   public onMenuToggle: (isOpen: boolean) => void;
-  public onRecording: (isRecording: boolean) => void;
   public onUpdateSendBtn: (icon: ChatSendBtnIcon) => void;
   public onMessageSent2: () => void;
   public forwardStoryCallback: (e: MouseEvent) => void;
+  /** asked before anything this field sends goes, after it is recorded or picked; nothing goes on `false` */
+  public confirmSending: () => Promise<boolean>;
 
   public emoticonsDropdown: EmoticonsDropdown;
 
@@ -626,6 +644,10 @@ export default class ChatInput {
   public suggestedPost: SuggestedPostPayload;
   private inputHelperNavigationItem: NavigationItem;
   private placeholderParamsMiddlewareHelper: MiddlewareHelper;
+  // * what the field says while empty (`getPlaceholderParams`), and a bot keyboard's words said instead
+  private placeholderParams: Parameters<ChatInput['updateMessageInputPlaceholder']>[0];
+  private keyboardPlaceholder: string;
+  private keyboardPlaceholderElement: HTMLElement;
 
   private savedReplyToPollOption?: {
     msgId: number;
@@ -847,7 +869,9 @@ export default class ChatInput {
     this.replyElements.content.append(this.replyElements.iconBtn, this.replyElements.cancelBtn);
     this.replyElements.container.append(this.replyElements.content);
 
-    attachClickEvent(this.replyElements.cancelBtn, this.onHelperCancel, {listenerSetter: this.listenerSetter});
+    // * a press must not take focus from the message field: Enter on a focused cancel button both sends
+    // * what is in the field and presses the button again, cancelling an edit that is being saved
+    attachClickEvent(this.replyElements.cancelBtn, this.onHelperCancelByUser, {listenerSetter: this.listenerSetter, cancelMouseDown: true});
     attachClickEvent(this.replyElements.content, this.onHelperClick, {listenerSetter: this.listenerSetter});
 
     const buttons: ButtonMenuItemOptions[] = [{
@@ -864,13 +888,13 @@ export default class ChatInput {
     }, this.replyElements.doNotReply = {
       icon: 'delete',
       text: 'DoNotReply',
-      onClick: this.onHelperCancel,
+      onClick: this.onHelperCancelByUser,
       danger: true/* ,
       separator: true */
     }, this.replyElements.doNotQuote = {
       icon: 'delete',
       text: 'DoNotQuote',
-      onClick: this.onHelperCancel,
+      onClick: this.onHelperCancelByUser,
       danger: true
     }];
     const btnMenu = this.replyElements.menuContainer = ButtonMenuSync({
@@ -1131,15 +1155,79 @@ export default class ChatInput {
   private constructReplyMarkup() {
     this.btnToggleReplyMarkup = this.createButtonIcon('botcom toggle-reply-markup float hide', {noRipple: true, ariaLabel: 'General.Keyboard'});
     this.replyKeyboard = new ReplyKeyboard({
-      appendTo: this.rowsWrapper,
+      // * under the field, which it lifts
+      appendTo: this.chatInput,
       listenerSetter: this.listenerSetter,
       managers: this.managers,
       btnHover: this.btnToggleReplyMarkup,
       chatInput: this,
       middleware: this.middlewareHelper.get()
     });
-    this.listenerSetter.add(this.replyKeyboard)('open', () => this.btnToggleReplyMarkup.classList.add('active'));
-    this.listenerSetter.add(this.replyKeyboard)('close', () => this.btnToggleReplyMarkup.classList.remove('active'));
+    this.listenerSetter.add(this.replyKeyboard)('open', () => {
+      this.btnToggleReplyMarkup.classList.add('active');
+      if(this.emoticonsDropdown?.isActive()) this.emoticonsDropdown.toggle(false);
+      // * one under the field is out of it at once, closed now or still fading (it is no more active then, but laid
+      // * out for its time): the two would stand one on another, the field on both
+      const element = this.emoticonsDropdown?.getElement();
+      if(element?.classList.contains('is-under') && this.emoticonsDropdown.chatInput === this) element.style.display = 'none';
+      this.updateReplyMarkupToggle();
+      this.updateKeyboardPlaceholder();
+    });
+    this.listenerSetter.add(this.replyKeyboard)('close', () => {
+      this.btnToggleReplyMarkup.classList.remove('active');
+      this.updateReplyMarkupToggle();
+      this.updateKeyboardPlaceholder();
+    });
+    // * a language applied over the bot's words puts the field's own back: the bot's go there again
+    this.listenerSetter.add(rootScope)('language_apply', () => {
+      if(this.keyboardPlaceholder) this.updateKeyboardPlaceholder();
+    });
+  }
+
+  // * the keyboard's button goes with an empty field, like the other side buttons - but not while the
+  // * keyboard is open, or nothing would close it; and a keyboard that is not to be closed has none
+  public updateReplyMarkupToggle(isInputEmpty = this.isInputEmpty()) {
+    this.btnToggleReplyMarkup?.classList.toggle(
+      'show',
+      (isInputEmpty || this.replyKeyboard.isActive()) &&
+        !this.replyKeyboard.isPermanent() &&
+        this.chat.type !== ChatType.Scheduled &&
+        !this.isWelcomeComposer
+    );
+  }
+
+  /**
+   * Whether the bot's keyboard may stand under the field: the field is there - a view with one (not Recent Actions or
+   * a static preview), not given way to a control, expanded or on its way back from it (held at a height of its own,
+   * which the keyboard is not in), hidden or locked by a recording - and not among scheduled messages, which have the
+   * chat's keyboard but no button for it: a press of it would send at once
+   */
+  public canShowReplyKeyboard() {
+    return !this.chat.noInput &&
+      this.chat.type !== ChatType.Scheduled &&
+      !this.recording &&
+      !this.fakeWrapperTo &&
+      !this.messageInputExpanded &&
+      !this.chatInput.classList.contains('is-message-input-resizing') &&
+      !this.chatInput.classList.contains('is-hidden');
+  }
+
+  /** And whether it may open by itself (`ReplyKeyboard.autoShow`): not over what the user writes, edits, or has saved */
+  public canShowReplyKeyboardItself() {
+    return this.canShowReplyKeyboard() && !this.draftRestoring && this.isInputEmpty() && !this.editMsgId;
+  }
+
+  /** The field takes focus with its caret at the end, a touch device's too (a keyboard user's focus, given back) */
+  public focusMessageInput() {
+    const editor = getChatInputEditor(this.messageInput);
+    if(editor) editor.focusAtEnd(true);
+    else this.messageInput.focus();
+  }
+
+  /** A recording takes the field's place (`ChatRecording`): the bot's keyboard goes while it lasts, and comes back */
+  public onRecordingChange(recording: boolean) {
+    if(recording) this.replyKeyboard?.suspend();
+    else this.replyKeyboard?.resume();
   }
 
   private constructBotCommands() {
@@ -1162,6 +1250,8 @@ export default class ChatInput {
 
     this.botCommandsView = document.createElement('div');
     this.botCommandsView.classList.add('new-message-bot-commands-view');
+    // * the bot's own words: cut at their own end, whatever the interface's direction
+    setDirection(this.botCommandsView);
     this.botCommandsToggle.append(scaler, this.botCommandsView);
 
     let webViewTempId = 0, waitingForWebView = false;
@@ -1459,6 +1549,25 @@ export default class ChatInput {
         ]).then(([canGift, {premium_gift_attach_menu_icon}]) => canGift && premium_gift_attach_menu_icon);
       }
     }, {
+      // * Grams to the person this chat is with, like the desktop client's attach menu
+      icon: 'wallet',
+      richMessageAction: 'sendMoney',
+      text: 'WalletAttachMoney',
+      onClick: () => {
+        const userId = this.chat.peerId.toUserId();
+        import('@components/wallet').then(({default: showWalletPopup}) => showWalletPopup({send: {userId}, fromChat: true}));
+      },
+      verify: async() => {
+        const peerId = this.chat.peerId;
+        if(!isWalletReleased() || this.editMsgId || this.ephemeralComposer || this.isWelcomeComposer) return false;
+        if(!peerId.isUser() || peerId === rootScope.myId || this.chat.isBot) return false;
+        const [regular, appConfig] = await Promise.all([
+          this.managers.appUsersManager.isRegularUser(peerId.toUserId()),
+          this.managers.apiManager.getAppConfig()
+        ]);
+        return regular && isWalletAvailable(appConfig);
+      }
+    }, {
       icon: 'poll',
       richMessageAction: 'poll',
       text: 'Poll',
@@ -1485,7 +1594,7 @@ export default class ChatInput {
         }
 
         if(!rootScope.premium) {
-          showPremiumPopup();
+          hotReloadGuard.showPremiumPopup();
           return;
         }
 
@@ -1595,6 +1704,7 @@ export default class ChatInput {
       this.btnSuggestPost,
       this.btnAutoDeletePeriod,
       this.btnSendGift,
+      this.btnReaction,
       this.btnToggleEmoticons,
       this.fileInput
     ].filter(Boolean));
@@ -1627,7 +1737,7 @@ export default class ChatInput {
       ['check', 'edit'],
       ['microphone_filled', 'record'],
       ['recordround_filled', 'record-video'],
-      ['forward_filled', 'forward'],
+      ['forward', 'forward'],
       ['stop', 'stop']
     ];
     this.btnSend.append(...icons.map(([name, type, mirror]) => Icon(name, 'animated-button-icon-icon', 'btn-send-icon-' + type, ...(mirror ? [mirror] : []))));
@@ -1641,7 +1751,7 @@ export default class ChatInput {
       const [effect, setEffect] = createSignal<DocId>();
       this.effect = effect;
       this.setEffect = setEffect;
-      this.btnSendContainer.append(SelectedEffect({effect: this.effect}) as HTMLElement);
+      this.btnSendContainer.append(unwrapSolidElement(SelectedEffect({effect: this.effect})) as HTMLElement);
     });
 
     this.sendMenu = new SendMenu({
@@ -1687,13 +1797,16 @@ export default class ChatInput {
       withEffects: () => this.chat.peerId.isUser() && this.chat.peerId !== rootScope.myId,
       effectsWithinMenu: () => mediaSizes.isLessThanFloatingLeftSidebar,
       effect: this.effect,
-      onEffect: this.setEffect
+      // * the effect is the draft's as much as its text: chosen, it is saved the same way
+      onEffect: (effect) => {
+        this.setEffect(effect);
+        this.saveDraftDebounced();
+      }
     });
 
     // Move the morphing send/record button into the input row as the last button.
     // btnCancelRecord is built above but intentionally not appended to the DOM.
     this.newMessageWrapper.append(this.btnSendContainer);
-    this.inputContainer.append(...[this.btnReaction].filter(Boolean));
 
     // The voice + round-video recording panels are constructed and mounted by
     // ChatRecording (built in constructRecorder below): the voice panel is
@@ -1711,6 +1824,7 @@ export default class ChatInput {
           createEffect(() => {
             const shouldBeTop = windowSize.height >= 570 && windowSize.width > 600;
             this.emoticonsDropdown.getElement().classList.toggle('is-under', !shouldBeTop);
+            if(!shouldBeTop && this.emoticonsDropdown.isActive()) this.emoticonsDropdown.chatInput.onEmoticonsUnder();
           });
         });
       }
@@ -1799,7 +1913,7 @@ export default class ChatInput {
     attachClickEvent(this.botStartBtn, this.startBot, {listenerSetter: this.listenerSetter});
     attachClickEvent(this.unblockBtn, this.unblockUser, {listenerSetter: this.listenerSetter});
     attachClickEvent(this.onlyPremiumBtn, () => {
-      showPremiumPopup();
+      hotReloadGuard.showPremiumPopup();
     }, {listenerSetter: this.listenerSetter});
     attachClickEvent(this.frozenBtn, () => {
       showFrozenPopup();
@@ -1853,7 +1967,9 @@ export default class ChatInput {
     // The control container is now a single uniform-width plate:
     // Button.Icon + Button + Button.Icon (see controlPlate.tsx). All the
     // single-button states share the centre slot — only one is ever visible.
-    const controlPlate = ChatInputPlate({
+    // Both side buttons start hidden, so the centre one spans the plate.
+    const controlPlate = this.controlPlate = ChatInputPlate({
+      class: CHAT_INPUT_PLATE_SINGLE_CLASS,
       left: this.directControlBtn,
       right: this.giftControlBtn,
       center: [
@@ -1924,14 +2040,10 @@ export default class ChatInput {
       }
 
       if(this.chat.threadId !== threadId || this.chat.monoforumThreadId !== monoforumThreadId || this.chat.peerId !== peerId || PEER_EXCEPTIONS.has(this.chat.type)) return;
-      if(!draft) {
-        // a pending local save means the user is actively typing newer content —
-        // let it win and sync normally instead of clobbering it with the remote clear.
-        // but a forced clear is our OWN send completing (clearDraft: true), so always
-        // honour it — otherwise the input never clears after sending while typing.
-        if(!force && this.saveDraftDebounced.isDebounced()) return;
-        this.saveDraftDebounced.clearTimeout();
-      }
+      // a forced clear is our OWN send completing (clearDraft: true): what was still to be saved went with it, and
+      // it clears the field whatever it holds - otherwise the input never clears after sending while typing. Any
+      // other draft takes the field only while it holds what the server has (`canTakeDraftFromElsewhere`)
+      if(!draft && force) this.saveDraftDebounced.clearTimeout();
       this.setDraft(draft, true, force);
     });
 
@@ -2206,6 +2318,10 @@ export default class ChatInput {
 
     this.fakeWrapperTo = neededFakeContainer;
 
+    // * the field gives way to a control (selection, Start, Unblock...): the keyboard goes with it, and comes back with it
+    if(forwards) this.replyKeyboard?.suspend();
+    else this.replyKeyboard?.resume();
+
     const duration = animate ? 200 : 0;
     SetTransition({
       element: this.inputContainer,
@@ -2263,10 +2379,10 @@ export default class ChatInput {
     });
 
     this.managers.appUsersManager.toggleBlock(peerId, false).then(() => {
-      if(middleware()) {
-        toggle();
-        this.toggleControlButtonDisability = undefined;
-      }
+      this.releaseControlButton(toggle, middleware);
+    }, (err: ApiError) => {
+      this.releaseControlButton(toggle, middleware);
+      toastError(err, 'unblock error');
     });
   };
 
@@ -2282,13 +2398,29 @@ export default class ChatInput {
     });
 
     this.managers.appMessagesManager.startBot(peerId.toUserId(), undefined, startParam).then(() => {
-      if(middleware()) {
-        toggle();
-        this.toggleControlButtonDisability = undefined;
+      if(this.releaseControlButton(toggle, middleware)) {
         this.setStartParam();
       }
+    }, (err: ApiError) => {
+      // * a start parameter the bot does not take, a block that could not be lifted
+      this.releaseControlButton(toggle, middleware);
+      toastError(err, 'start bot error');
     });
   };
+
+  /**
+   * A control button (Unblock, Start) comes back once its request answers, a refusal included: it is there to be pressed
+   * again. Not when the chat, or what the button was for, changed meanwhile
+   */
+  private releaseControlButton(toggle: () => void, middleware: () => boolean) {
+    if(!middleware()) {
+      return false;
+    }
+
+    toggle();
+    this.toggleControlButtonDisability = undefined;
+    return true;
+  }
 
   public isReplyInTopicOverlayNeeded() {
     return REPLY_IN_TOPIC &&
@@ -2318,7 +2450,8 @@ export default class ChatInput {
       return 'request';
     }
 
-    if((chat as MTChat.channel).pFlags.join_to_send || !threadId) {
+    // Forum topics need a Join action even when ordinary comment threads allow non-members to send.
+    if((chat as MTChat.channel).pFlags.join_to_send || !threadId || this.chat.isForumTopic) {
       return 'join';
     }
   }
@@ -2412,11 +2545,30 @@ export default class ChatInput {
 
   private onEmoticonsOpen = () => {
     this.onEmoticonsToggle(true);
+    // * the panel is every chat's: this field's only when it opens over it
+    if(this.emoticonsDropdown.chatInput === this && this.emoticonsDropdown.getElement().classList.contains('is-under')) {
+      this.onEmoticonsUnder();
+    }
   };
+
+  /**
+   * The emoji panel open under this field - opened there, or moved there by the window's size: the bot's keyboard, which
+   * stands there too, is out of it at once, or the field would stand on both meanwhile
+   */
+  public onEmoticonsUnder() {
+    this.replyKeyboard?.suspend(false);
+  }
 
   private onEmoticonsClose = () => {
     this.onEmoticonsToggle(false);
+    // * a bot keyboard that came while the user had it open: once it is closed, which it is after the event
+    if(this.emoticonsDropdown.chatInput === this) queueMicrotask(() => this.replyKeyboard?.resume());
   };
+
+  // * the emoji panel the user has open over or under this field: the panel is every chat's
+  public isEmoticonsOpen() {
+    return !!this.emoticonsDropdown?.isActive() && this.emoticonsDropdown.chatInput === this;
+  }
 
   public getReadyToSend(callback: () => void) {
     return this.chat.type === ChatType.Scheduled ? (this.scheduleSending(callback), true) : (callback(), false);
@@ -2585,11 +2737,7 @@ export default class ChatInput {
           reply_to_peer_id: replyTo.replyToPeerId,
           monoforum_peer_id: replyTo.replyToMonoforumPeerId,
           poll_option: replyTo.replyToPollOption,
-          ...(replyTo.replyToQuote && {
-            quote_text: replyTo.replyToQuote.text,
-            quote_entities: replyTo.replyToQuote.entities,
-            quote_offset: replyTo.replyToQuote.offset
-          })
+          ...(replyTo.replyToQuote && getInputReplyQuote(replyTo.replyToQuote))
         } : undefined,
         media: !richMessage && webPage ? {
           _: 'inputMediaWebPage',
@@ -2637,14 +2785,24 @@ export default class ChatInput {
     // Hydration and leaving a chat must not publish the received draft back to
     // the server. The UI representation may differ from the server's flags.
     if(this.appliedInputDraft && draftsAreEqual(draft, this.appliedInputDraft.value)) return;
+    // * until it is through, the field is ahead of the server
     this.appliedInputDraft = undefined;
-    this.managers.appDraftsManager.syncDraft({
+    const revision = ++this.draftSaveRevision;
+    const generation = this.inputValueGeneration;
+    const middleware = this.getMiddleware();
+    Promise.resolve(this.managers.appDraftsManager.syncDraft({
       peerId: this.chat.peerId,
       threadId: this.chat.threadId,
       monoforumThreadId: this.chat.monoforumThreadId,
       localDraft: draft,
       inputRichMessage: richMessage?.input
-    });
+    })).then((saved) => {
+      // * the field's last save is the server's draft now, and the field holds what the server has while it holds
+      // * what that save carried
+      if(saved && middleware() && revision === this.draftSaveRevision && generation === this.inputValueGeneration) {
+        this.appliedInputDraft = {value: draft};
+      }
+    }, noop);
   }
 
   public mentionUser(peerId: PeerId, isHelper?: boolean) {
@@ -2713,6 +2871,8 @@ export default class ChatInput {
     if(this.chat && !this.chat.peerId) {
       this.chatInput.classList.add('hide');
       this.goDownBtn.classList.add('hide');
+      // * with the field it stood under, and what closed it with it
+      this.replyKeyboard?.toggle(false, false, false);
     }
 
     cancelSelection();
@@ -2731,11 +2891,30 @@ export default class ChatInput {
     }
   }
 
+  /**
+   * Whether a draft from elsewhere (the server's, another session's or tab's) may take the field: only while the field
+   * holds what the server has (`appliedInputDraft`) - nothing of its own unsaved or on its way there - and no save of
+   * its own has gone out since the draft came (`saveRevision`, taken then), as tdesktop takes a cloud draft only
+   * over a local one no newer. Kept, the field's older text would be saved over the newer draft on the way out. A
+   * message being edited is no draft at all, and messages picked to forward or a post being suggested (its price and
+   * schedule) are no part of one: the draft's text coming would take them along
+   */
+  private canTakeDraftFromElsewhere(saveRevision: number, currentDraft = this.getCurrentInputAsDraft()) {
+    const applied = this.appliedInputDraft;
+    return saveRevision === this.draftSaveRevision &&
+      !!applied && draftsAreEqual(currentDraft, applied.value) &&
+      !this.editMsgId && !this.forwarding && !this.suggestedPost;
+  }
+
   public async setDraft(draft?: MyDraftMessage, fromUpdate = true, force = false) {
     if(PEER_EXCEPTIONS.has(this.chat.type)) return false;
 
     const middleware = this.getMiddleware();
     const generation = this.inputValueGeneration;
+    const saveRevision = this.draftSaveRevision;
+    // * a draft from elsewhere is measured against the field as it comes: a save of the field's own ending while it
+    // * waits says nothing of a draft that came before it ended
+    const inStepOnArrival = fromUpdate && this.canTakeDraftFromElsewhere(saveRevision);
     // the field settles on the schema rich posting calls for first: an editor replaced while the
     // draft is fetched would drop it as stale, and an untouched rich draft would be converted
     await this.richMessageInput?.richReady;
@@ -2768,17 +2947,21 @@ export default class ChatInput {
               this.onMessageSent(true, undefined, true);
             });
           });
-        } else if(fromUpdate && !this.saveDraftDebounced.isDebounced()) {
-          // A composer that holds no draft has nothing to clear — most often
-          // the cleared draft is its own save of the emptied field coming
-          // back, and resetting the field would drop its undo history.
-          if(!this.getCurrentInputAsDraft()) return fromUpdate;
-          // This is an authoritative clear, not a local edit or a request to
-          // restore the draft again while another remote update is arriving.
-          this.clearInput(false, false);
-          this.clearHelper();
-          this.onMessageInput(undefined, true);
-          this.appliedInputDraft = {value: this.getCurrentInputAsDraft()};
+        } else if(!fromUpdate) {
+          // * restored with nothing there: the field holds what the server has while it holds nothing
+          if(!this.getCurrentInputAsDraft()) this.appliedInputDraft = {value: undefined};
+        } else {
+          // A composer that holds no draft has nothing to clear, and
+          // resetting the field would drop its undo history.
+          const currentDraft = this.getCurrentInputAsDraft();
+          if(currentDraft && inStepOnArrival && this.canTakeDraftFromElsewhere(saveRevision, currentDraft)) {
+            // This is an authoritative clear, not a local edit or a request to
+            // restore the draft again while another remote update is arriving.
+            this.clearInput(false, false);
+            this.clearHelper();
+            this.onMessageInput(undefined, true);
+            this.appliedInputDraft = {value: this.getCurrentInputAsDraft()};
+          }
         }
 
         return fromUpdate;
@@ -2788,7 +2971,12 @@ export default class ChatInput {
     const currentDraft = this.getCurrentInputAsDraft();
     const receivedDraftIsUnchanged = this.appliedInputDraft &&
       draftsAreEqual(currentDraft, this.appliedInputDraft.value);
-    if(!force && !isInputEmpty(this.messageInput) && !receivedDraftIsUnchanged) return false;
+    // * a restore leaves what the user wrote meanwhile; a draft from elsewhere takes the field only while it is in step
+    // * with the server, which a save of the field's own coming back never finds: the field is ahead of it till it is through
+    if(!force && (fromUpdate ?
+      !(inStepOnArrival && this.canTakeDraftFromElsewhere(saveRevision, currentDraft)) :
+      !isInputEmpty(this.messageInput) && !receivedDraftIsUnchanged
+    )) return false;
 
     const replyTo = draft.reply_to as InputReplyTo.inputReplyToMessage;
     const draftReplyToMsgId = replyTo?.reply_to_msg_id;
@@ -2797,10 +2985,17 @@ export default class ChatInput {
       return false;
     }
 
+    // * a draft the field does not show leaves it holding nothing of its own: in step for the next one from
+    // * elsewhere, while the one not shown stays the server's (`suppressDraftSyncForUnsupportedRichMessage`)
+    const keepInStep = () => {
+      if(!force) this.appliedInputDraft = {value: this.getCurrentInputAsDraft()};
+    };
+
     // as Android has it: where rich text may not be written, a rich draft is not shown, and it stays
     // on the server until something of the field's own replaces it
     if(draft.rich_message && this.richMessageInput && !this.richMessageInput.canWriteRich) {
       this.suppressDraftSyncForUnsupportedRichMessage = true;
+      keepInStep();
       return false;
     }
 
@@ -2810,6 +3005,7 @@ export default class ChatInput {
     )) {
       toastNew({langPackKey: 'RichMessage.Error.UnsupportedContent'});
       this.suppressDraftSyncForUnsupportedRichMessage = !!draft.rich_message;
+      keepInStep();
       return false;
     }
 
@@ -2818,19 +3014,13 @@ export default class ChatInput {
     }
 
     this.noWebPage = draft.pFlags.no_webpage;
-    if(draftReplyToMsgId) {
-      this.initMessageReply({
-        replyToMsgId: draftReplyToMsgId,
-        replyToPeerId: replyTo.reply_to_peer_id && getPeerId(replyTo.reply_to_peer_id),
-        replyToQuote: replyTo.quote_text && {
-          text: replyTo.quote_text,
-          entities: replyTo.quote_entities,
-          offset: replyTo.quote_offset
-        },
-        replyToPollOption: replyTo.poll_option,
-        replyToMonoforumPeerId: replyTo.monoforum_peer_id && getPeerId(replyTo.monoforum_peer_id)
-      });
-    }
+    const replySet = draftReplyToMsgId && this.initMessageReply({
+      replyToMsgId: draftReplyToMsgId,
+      replyToPeerId: replyTo.reply_to_peer_id && getPeerId(replyTo.reply_to_peer_id),
+      replyToQuote: getReplyQuote(replyTo),
+      replyToPollOption: replyTo.poll_option,
+      replyToMonoforumPeerId: replyTo.monoforum_peer_id && getPeerId(replyTo.monoforum_peer_id)
+    });
 
     const inputSet = this.setInputValue(
       draftTextWithEntities(draft),
@@ -2840,13 +3030,49 @@ export default class ChatInput {
       draft.rich_message
     );
     this.suppressDraftSyncForUnsupportedRichMessage = !inputSet && !!draft.rich_message;
+    if(!inputSet) {
+      keepInStep();
+      return inputSet;
+    }
+
+    // the field holds the received draft now: a save the resets before it asked for (`clearHelper`) has nothing
+    // of the user's to keep
+    this.saveDraftDebounced.clearTimeout();
+
+    // its reply is set once its message is read, after the text: what counts as applied takes the reply in then,
+    // or saving the untouched field would publish the draft back. Only the reply: a change of the user's since
+    // (the text, an effect) stays theirs to save
+    if(replySet) {
+      const appliedGeneration = this.inputValueGeneration;
+      void replySet.then(() => {
+        const applied = this.appliedInputDraft;
+        const current = this.getCurrentInputAsDraft();
+        const onlyReplyCame = applied && current && (applied.value ?
+          deepEqual(current, applied.value, ['date', 'reply_to']) :
+          !current.message && !current.rich_message && !current.media && !current.effect);
+        if(
+          middleware() &&
+          appliedGeneration === this.inputValueGeneration &&
+          onlyReplyCame &&
+          this.replyToMsgId === draftReplyToMsgId
+        ) {
+          this.appliedInputDraft = {value: current};
+        }
+      });
+    }
+
     return inputSet;
   }
 
   private createSendAs() {
     this.sendAsPeerId = undefined;
 
-    if(this.chat && (this.chat.type === ChatType.Chat || this.chat.type === ChatType.Discussion)) {
+    // * only a channel or a supergroup can be written to as someone else (ChatSendAs.updateManual)
+    if(
+      this.chat?.isChannel &&
+      !this.chat.isMonoforum &&
+      (this.chat.type === ChatType.Chat || this.chat.type === ChatType.Discussion)
+    ) {
       let firstChange = true;
       this.sendAs = new ChatSendAs({
         managers: this.managers,
@@ -2918,7 +3144,8 @@ export default class ChatInput {
       autoDeletePeriod,
       canManageAutoDelete,
       peerMuted,
-      ackedGlobalPrivacy
+      ackedGlobalPrivacy,
+      isAnonymousSending
     ] = await Promise.all([
       this.managers.appPeersManager.isBroadcast(peerId),
       this.managers.appPeersManager.isBroadcastGroup(peerId),
@@ -2938,10 +3165,16 @@ export default class ChatInput {
       this.managers.appNotificationsManager.isPeerLocalMuted({peerId, respectType: false}),
       this.btnSendGift ?
         modifyAckedPromise(this.managers.acknowledged.appPrivacyManager.getGlobalPrivacySettings()) :
-        undefined
+        undefined,
+      this.managers.appMessagesManager.isAnonymousSending(peerId)
     ]);
 
-    const placeholderParams = this.messageInput ? await this.getPlaceholderParams(canSendPlain) : undefined;
+    // * the placeholder needs the same flags: not asked for again, one after another
+    const placeholderParams = this.messageInput ? await this.getPlaceholderParams(canSendPlain, {
+      isBroadcast,
+      isBroadcastGroup,
+      isAnonymousSending
+    }) : undefined;
 
     return () => {
       const {isMonoforum, canManageDirectMessages, monoforumThreadId} = this.chat;
@@ -3044,8 +3277,11 @@ export default class ChatInput {
         // has a linked direct-messages chat) on the left, gift on the right.
         // Both are channel-only — a gigagroup or megagroup join just shows the
         // centre button.
-        this.directControlBtn.classList.toggle('hide', !(good && channel?.linked_monoforum_id));
-        this.giftControlBtn.classList.toggle('hide', !(good && isBroadcast));
+        const hasDirect = !!(good && channel?.linked_monoforum_id);
+        const hasGift = good && isBroadcast;
+        this.directControlBtn.classList.toggle('hide', !hasDirect);
+        this.giftControlBtn.classList.toggle('hide', !hasGift);
+        this.controlPlate.classList.toggle(CHAT_INPUT_PLATE_SINGLE_CLASS, !hasDirect && !hasGift);
       }
 
       if(this.chat && this.welcomeLimitPlate) {
@@ -3129,8 +3365,10 @@ export default class ChatInput {
 
       this.botStartBtn.classList.toggle('hide', haveSomethingInControl);
 
+      // * the saved draft, back in the field
+      let draftRestored: Promise<unknown>;
       if(this.messageInput) {
-        this.updateMessageInput(
+        draftRestored = this.updateMessageInput(
           canSend || haveSomethingInControl,
           canSendPlain && !this.chat.isTemporaryThread,
           placeholderParams,
@@ -3151,14 +3389,20 @@ export default class ChatInput {
         }
       }
 
-      this.messageInputField?.measureHeight(undefined, true);
-
       // * testing
       // this.startParam = this.appPeersManager.isBot(peerId) ? '123' : undefined;
 
       this.startParam = startParam;
 
-      this._center(neededFakeContainer, false);
+      const applyLayout = () => {
+        this.messageInputField?.measureHeight(undefined, true);
+        this._center(neededFakeContainer, false);
+        // * the chat opens with its bot's keyboard, as on iOS and Android: at once, as the rest of it - once a draft
+        // * it has is in the field, over which it does not
+        if(replyKeyboard) Promise.resolve(draftRestored).then(() => middleware() && replyKeyboard.autoShow(false), noop);
+      };
+      if(options.deferInputLayout) options.deferInputLayout(applyLayout);
+      else applyLayout();
 
       this.setStarsAmount(this.chat?.starsAmount); // should reset when undefined
 
@@ -3301,9 +3545,10 @@ export default class ChatInput {
     const useRafs = botCommandsToggle.parentElement ? 0 : 2;
 
     if(botMenuButton && isInputEmpty) {
-      // padding + icon size + icon margin
-      const width = getTextWidth(botMenuButton.text, FontFull) + 24 + 20 + 6;
-      this.newMessageWrapper.style.setProperty('--commands-size', `${Math.ceil(width)}px`);
+      // the text, which iOS keeps to half the panel less 60pt so the field stays usable on a phone, then the padding,
+      // the icon and its margin
+      const width = Math.ceil(getTextWidth(botMenuButton.text, FontFull));
+      this.newMessageWrapper.style.setProperty('--commands-size', `calc(min(${width}px, 50vw - 60px) + ${24 + 20 + 6}px)`);
     } else {
       // this.newMessageWrapper.style.setProperty('--commands-size', `38px`);
       this.newMessageWrapper.style.removeProperty('--commands-size');
@@ -3316,22 +3561,32 @@ export default class ChatInput {
     this.updateOffset('commands', forwards, skipAnimation, useRafs, true);
   }
 
-  public async getPlaceholderParams(canSend?: boolean): Promise<Parameters<ChatInput['updateMessageInputPlaceholder']>[0]> {
+  public async getPlaceholderParams(canSend?: boolean, peerState?: {
+    isBroadcast: boolean,
+    isBroadcastGroup: boolean,
+    isAnonymousSending: boolean
+  }): Promise<Parameters<ChatInput['updateMessageInputPlaceholder']>[0]> {
     this.placeholderParamsMiddlewareHelper.clean();
     canSend ??= await this.chat.canSend('send_plain');
     const {peerId, threadId, isForum, type} = this.chat;
     let key: LangPackKey, args: FormatterArguments, inputStarsCountEl: HTMLElement;
+    // * where the field only asks for a message, a bot's keyboard may ask in its words (`updateKeyboardPlaceholder`) - not
+    // * over what it cannot take, what it is for instead (a template, a thread to choose) or what a message costs, which
+    // * is said before it is sent (Android)
+    let yieldsToKeyboard = false;
     if(!canSend) {
       key = 'Channel.Persmission.MessageBlock';
     } else if(type === ChatType.Welcome) {
       key = 'WelcomeMessages.Placeholder';
     } else if(threadId && !isForum && !peerId.isUser()) {
       key = 'Comment';
+      yieldsToKeyboard = true;
     } else if(
-      await this.managers.appPeersManager.isBroadcast(peerId) ||
-      await this.managers.appPeersManager.isBroadcastGroup(peerId)
+      (peerState ? peerState.isBroadcast : await this.managers.appPeersManager.isBroadcast(peerId)) ||
+      (peerState ? peerState.isBroadcastGroup : await this.managers.appPeersManager.isBroadcastGroup(peerId))
     ) {
       key = 'ChannelBroadcast';
+      yieldsToKeyboard = true;
     } else if(this.chat.isMonoforum && this.chat.canManageDirectMessages) {
       key = this.inputState.store.isSuggestingUneditablePostChange ?
         'ChannelDirectMessages.CantChangeSuggestedPostMessage' :
@@ -3342,10 +3597,13 @@ export default class ChatInput {
       key = 'OffThreadMessage'
     } else if(
       (this.sendAsPeerId !== undefined && this.sendAsPeerId !== rootScope.myId) ||
-      await this.managers.appMessagesManager.isAnonymousSending(peerId)
+      (peerState ? peerState.isAnonymousSending : await this.managers.appMessagesManager.isAnonymousSending(peerId))
     ) {
       key = 'SendAnonymously';
-    } else if(type === ChatType.Stories) {
+      yieldsToKeyboard = true;
+    } else if(type === ChatType.Stories && !this.chat.starsAmount) {
+      // * a reply that costs Stars shows its price below instead, over the stealth mode countdown too:
+      // * as Android has it, what a message costs is said before it is sent
       const stealthModeActiveUntilDate = this.chat.stealthMode?.active_until_date || 0;
       if(stealthModeActiveUntilDate > tsNow(true)) {
         const {element, dispose} = slowModeTimer(() => stealthModeActiveUntilDate - tsNow(true));
@@ -3353,7 +3611,8 @@ export default class ChatInput {
         args = [element];
         this.placeholderParamsMiddlewareHelper.get().onClean(dispose);
       } else {
-        key = 'Story.ReplyPlaceholder';
+        // * a group's story is answered in the group, for everyone there to read
+        key = peerId.isUser() ? 'Story.ReplyPlaceholder' : 'Story.CommentPlaceholder';
       }
     } else if(isForum && type === ChatType.Chat && !threadId) {
       const topic = await this.managers.dialogsStorage.getForumTopic(peerId, GENERAL_TOPIC_ID);
@@ -3363,6 +3622,8 @@ export default class ChatInput {
       } else {
         key = 'Message';
       }
+
+      yieldsToKeyboard = true;
     } else if(this.chat.starsAmount) {
       key = 'PaidMessages.MessageForStars';
       const starsElement = document.createElement('span');
@@ -3372,19 +3633,17 @@ export default class ChatInput {
       args = [starsElement];
     } else {
       key = 'Message';
+      yieldsToKeyboard = true;
     }
 
-    return {key, args, inputStarsCountEl};
+    return {key, args, inputStarsCountEl, yieldsToKeyboard};
   }
 
-  public updateMessageInputPlaceholder({
-    key,
-    args = [],
-    inputStarsCountEl
-  }: {
+  public updateMessageInputPlaceholder(params: {
     key: LangPackKey,
     args?: FormatterArguments,
-    inputStarsCountEl?: HTMLElement
+    inputStarsCountEl?: HTMLElement,
+    yieldsToKeyboard?: boolean
   }) {
     // console.warn('[input] update placeholder');
     // const i = I18n.weakMap.get(this.messageInput) as I18n.IntlElement;
@@ -3395,10 +3654,45 @@ export default class ChatInput {
 
     const oldKey = i.key;
     const oldArgs = i.args;
-    i.compareAndUpdateBool({key, args}) &&
-    this.inputState.set({inputStarsCountEl});
+    this.placeholderParams = params;
+    this.updateKeyboardPlaceholder();
 
     return {oldKey, oldArgs};
+  }
+
+  /**
+   * The field's placeholder: its own words, or a bot's keyboard's while they apply (`ReplyKeyboard.getPlaceholder`),
+   * as desktop and Android have them - not while a message is edited, nor where the field says more than that it asks
+   * for a message (`yieldsToKeyboard`). The field's own wait under the bot's as the placeholder's, put back once they go
+   */
+  public updateKeyboardPlaceholder() {
+    const element = this.messageInputField?.placeholder;
+    const i = element && I18n.weakMap.get(element) as I18n.IntlElement;
+    const params = this.placeholderParams;
+    if(!i || !params) {
+      return;
+    }
+
+    const {key, args = [], inputStarsCountEl, yieldsToKeyboard} = params;
+    const text = yieldsToKeyboard && !this.editMsgId ?
+      this.replyKeyboard?.getPlaceholder(this.replyToMsgId, this.replyToPeerId) :
+      undefined;
+    if(text) {
+      i.key = key;
+      i.args = args;
+      const span = this.keyboardPlaceholderElement ??= document.createElement('span');
+      // * the bot's words, in their own direction
+      span.dir = 'auto';
+      if(text !== this.keyboardPlaceholder) span.replaceChildren(wrapEmojiText(text));
+      if(span.parentElement !== element) element.replaceChildren(span);
+    } else if(this.keyboardPlaceholder) {
+      i.update({key, args});
+    } else if(!i.compareAndUpdateBool({key, args})) {
+      return;
+    }
+
+    this.keyboardPlaceholder = text;
+    this.inputState.set({inputStarsCountEl});
   }
 
   private filterAttachMenuButtons() {
@@ -3408,7 +3702,7 @@ export default class ChatInput {
         button.richMessageAction,
         this.messageInputExpanded
       )) return false;
-      return button.verify ? button.verify() : true;
+      return verifyMenuItem(button);
     });
   }
 
@@ -3426,10 +3720,11 @@ export default class ChatInput {
     placeholderParams: Parameters<ChatInput['updateMessageInputPlaceholder']>[0],
     text?: string,
     entities?: MessageEntity[]
-  ) {
+  ): Promise<unknown> | undefined {
     const {chatInput, messageInput} = this;
     const isHidden = chatInput.classList.contains('is-hidden');
     const willBeHidden = !canSend;
+    if(willBeHidden) this.replyKeyboard?.toggle(false);
     if(isHidden !== willBeHidden) {
       chatInput.classList.add('no-transition');
       chatInput.classList.toggle('is-hidden', !canSend);
@@ -3438,6 +3733,7 @@ export default class ChatInput {
     }
 
     const isEditingAndLocked = canSend && !canSendPlain && this.restoreInputLock;
+    let draftRestored: Promise<unknown>;
 
     !isEditingAndLocked && this.updateMessageInputPlaceholder(placeholderParams);
 
@@ -3458,7 +3754,13 @@ export default class ChatInput {
       if(text) {
         this.managers.appDraftsManager.setDraft(this.chat.peerId, undefined, text, entities);
       }
-      this.setDraft(undefined, false);
+      // * a keyboard that comes meanwhile does not open by itself over the field it is restored to
+      // * (`canShowReplyKeyboardItself`): the chat's opening asks once it is there
+      const restoring = this.draftRestoring = draftRestored = this.setDraft(undefined, false);
+      const restored = () => {
+        if(this.draftRestoring === restoring) this.draftRestoring = undefined;
+      };
+      restoring.then(restored, restored);
 
       if(!messageInput.innerHTML) {
         this.messageInputField.measureHeight(undefined, true);
@@ -3466,6 +3768,7 @@ export default class ChatInput {
     }
 
     this.updateSendBtn();
+    return draftRestored;
   }
 
   private notifyChatInputHeight() {
@@ -3490,6 +3793,8 @@ export default class ChatInput {
   private attachMessageInputListeners() {
     if(IS_TOUCH_SUPPORTED) {
       attachClickEvent(this.messageInput, (e) => {
+        this.replyKeyboard?.giveWayToDeviceKeyboard();
+
         if(this.emoticonsDropdown.isActive()) {
           this.emoticonsDropdown.toggle(false);
           blurActiveElement();
@@ -3499,10 +3804,39 @@ export default class ChatInput {
         }
 
         if(!this.chat.isStandalone) {
-          this.appImManager.selectTab(APP_TABS.CHAT); // * set chat tab for album orientation
+          // * the blur it makes on the way is not the device's keyboard going (`focusout` below): the tap brings it
+          this.blurringByTap = true;
+          try {
+            this.appImManager.selectTab(APP_TABS.CHAT); // * set chat tab for album orientation
+          } finally {
+            this.blurringByTap = false;
+          }
         }
         // this.saveScroll();
       }, {listenerSetter: this.listenerSetter});
+
+      // * the device's keyboard put away with the field still focused (Android's back, which blurs nothing - the window
+      // * keeps its size, the visual viewport alone grows): the bot's comes back in its place, as on a blur (`focusout`
+      // * below). Told from a zoom and a turn of the screen by the same scale and window
+      const viewport = window.visualViewport;
+      if(viewport) {
+        // * grown from its lowest since, over as many resizes as the keyboard takes to go
+        let lowest = viewport.height, {scale} = viewport, windowHeight = window.innerHeight;
+        this.listenerSetter.add(viewport)('resize', () => {
+          if(viewport.scale !== scale || window.innerHeight !== windowHeight) {
+            lowest = viewport.height;
+            ({scale} = viewport);
+            windowHeight = window.innerHeight;
+            return;
+          }
+
+          lowest = Math.min(lowest, viewport.height);
+          if(viewport.height - lowest > windowHeight / 4) {
+            lowest = viewport.height;
+            if(this.messageInput.contains(document.activeElement)) this.replyKeyboard?.autoShow();
+          }
+        });
+      }
 
       /* this.listenerSetter.add(window)('resize', () => {
         this.restoreScroll();
@@ -3559,11 +3893,28 @@ export default class ChatInput {
       // this.updateSendBtn();
 
       this.onFocusChange?.(false);
+      // * the device's keyboard gone, the bot's comes back in its place if it would open by itself - a persistent
+      // * one always does (iOS, Android)
+      if(IS_TOUCH_SUPPORTED && !this.blurringByTap) this.replyKeyboard?.autoShow();
     });
   }
 
   public canSendPlain() {
     return this.messageInput.isContentEditable && !this.chatInput.classList.contains('is-hidden');
+  }
+
+  public async isSendingConfirmed() {
+    return !this.confirmSending || await this.confirmSending();
+  }
+
+  // * for a send that goes at once: it waits only for what there is to ask
+  public whenSendingConfirmed(send: () => void) {
+    if(!this.confirmSending) {
+      send();
+      return;
+    }
+
+    this.confirmSending().then((confirmed) => confirmed && send());
   }
 
   public isEphemeralComposerMode() {
@@ -4199,32 +4550,39 @@ export default class ChatInput {
           setPreloaderShow(true);
         }
 
+        // * a query a newer one replaced (skipped by the debounce, or answered late) leaves the spinner to that one;
+        // * the last one stops it however it ends, a failed answer (BOT_RESPONSE_TIMEOUT, no inline mode) included
+        const generation = ++this.inlineQueryGeneration;
+        const hidePreloader = () => {
+          if(generation === this.inlineQueryGeneration) {
+            setPreloaderShow(false);
+          }
+        };
+
         this.inlineHelper.checkQuery(this.chat.peerId, username, query, canSendInline, allowGuestChat).then(({user, renderPromise, guestChat}) => {
           if(guestChat) {
             // * a guest bot was resolved for the first time — remember it so the next keystroke
             // * skips the inline path entirely, and drop back to normal send mode
             this.knownGuestBots.add(username.toLowerCase());
             needPlaceholder = false;
-            delete this.messageInput.dataset.inlinePlaceholder;
-            setPreloaderShow(false);
+            this.messageInputEditor?.setInlineBotPlaceholder();
+            hidePreloader();
             return;
           }
 
           if(needPlaceholder && user.bot_inline_placeholder) {
-            this.messageInput.dataset.inlinePlaceholder = user.bot_inline_placeholder;
+            this.messageInputEditor?.setInlineBotPlaceholder(user.bot_inline_placeholder);
           }
 
-          renderPromise.then(() => {
-            setPreloaderShow(false);
-          });
+          renderPromise.then(hidePreloader, hidePreloader);
         }).catch((err: ApiError) => {
-          setPreloaderShow(false);
+          hidePreloader();
         });
       }
     }
 
     if(!needPlaceholder) {
-      delete this.messageInput.dataset.inlinePlaceholder;
+      this.messageInputEditor?.setInlineBotPlaceholder();
     }
 
     if(foundHelper !== this.inlineHelper) {
@@ -4289,6 +4647,10 @@ export default class ChatInput {
       textElement = i18n('SlowmodeSendError');
     } else {
       const chatFull = await managers.appProfileManager.getChatFull(chatId) as ChatFull.channelFull;
+      // * a booster sends without waiting, as tdesktop has it; the other slow mode limits still hold
+      if(await managers.appChatsManager.isRestrictionLiftedByBoosts(chatId)) {
+        return false;
+      }
 
       const getLeftDuration = () => Math.max(0, (chatFull.slowmode_next_send_date || 0) - tsNow(true));
       if(!getLeftDuration()) {
@@ -4363,6 +4725,19 @@ export default class ChatInput {
       // (right-click / long-press), not by clicking.
       this.recordingController.startActive();
     }
+  };
+
+  /**
+   * The user's own cancel of the helper - its button, its menu, Escape - not the app's clearing it (after a send, a
+   * message gone): a force reply's answer dropped so is not set again (`ReplyKeyboard.onReplyDropped`). A link's
+   * preview over the reply is what such a cancel takes away, the reply staying
+   */
+  private onHelperCancelByUser = (e?: Event) => {
+    if(this.helperType === 'reply' && !this.willSendWebPage) {
+      this.replyKeyboard?.onReplyDropped(this.replyToMsgId, this.replyToPeerId);
+    }
+
+    return this.onHelperCancel(e);
   };
 
   public onHelperCancel = async(e?: Event, force?: boolean) => {
@@ -4509,11 +4884,12 @@ export default class ChatInput {
     this.helperWaitingForward = true;
 
     const forwarding = copy(this.forwarding);
+    const videoTimestamp = this.forwardingVideoTimestamp;
     const helperFunc = this.helperFunc;
     this.clearHelper();
     this.updateSendBtn();
     let selected = false;
-    showForwardPopup(
+    hotReloadGuard.showForwardPopup(
       forwarding,
       () => {
         selected = true;
@@ -4525,7 +4901,9 @@ export default class ChatInput {
         if(!selected) {
           helperFunc();
         }
-      }
+      },
+      undefined,
+      videoTimestamp
     );
   }
 
@@ -4687,9 +5065,7 @@ export default class ChatInput {
       this.btnScheduled.classList.toggle('show', isInputEmpty && this.chat.type !== ChatType.Scheduled && !this.isWelcomeComposer);
     }
 
-    if(this.btnToggleReplyMarkup) {
-      this.btnToggleReplyMarkup.classList.toggle('show', isInputEmpty && this.chat.type !== ChatType.Scheduled && !this.isWelcomeComposer);
-    }
+    this.updateReplyMarkupToggle(isInputEmpty);
 
     if(this.btnSendGift) {
       this.btnSendGift.classList.toggle('show', isInputEmpty && !this.isWelcomeComposer);
@@ -4810,6 +5186,7 @@ export default class ChatInput {
     inputField,
     chatType,
     forwarding,
+    media,
     sendTextParams = {},
     forwardParams = {},
     slowModeParams,
@@ -4827,13 +5204,18 @@ export default class ChatInput {
     onSending?: (textMessages: number) => void,
     chatType?: ChatType,
     forwarding?: ChatInput['forwarding'],
+    /** media of its own, one message sent after the text: a story shared with a comment */
+    media?: InputMedia,
     sendTextParams?: Parameters<AppMessagesManager['sendText']>[0],
-    forwardParams?: Pick<Parameters<AppMessagesManager['forwardMessages']>[0], 'dropAuthor' | 'dropCaptions'>,
+    forwardParams?: Pick<Parameters<AppMessagesManager['forwardMessages']>[0], 'dropAuthor' | 'dropCaptions' | 'videoTimestamp'>,
     slowModeParams: Pick<Parameters<typeof ChatInput['showSlowModeTooltipIfNeeded']>[0], 'peerId' | 'managers' | 'element'>,
     paidMessageInterceptor?: PaidMessagesInterceptor,
     ephemeral?: boolean,
     text?: LocalTextWithOptionalEntities
   }) {
+    // * the managers of the chat the message is sent from: a send still on its way when the tab switches
+    // * to another account goes out from the account it was written in
+    const {managers} = slowModeParams;
     forwarding = ephemeral ? undefined : copy(forwarding);
     let {value, entities} = inputField ?
       getRichValueWithCaret(inputField.input, true, false) :
@@ -4865,7 +5247,7 @@ export default class ChatInput {
         undefined
     );
     if(richMessage) {
-      const postingChoice = await getRichMessagePostingChoice(rootScope.managers);
+      const postingChoice = await getRichMessagePostingChoice(managers);
       if(postingChoice === 'cancel') return false;
       if(postingChoice === 'plain') {
         // as Android has it: the formatting goes in the field, where the result can be read and
@@ -4893,7 +5275,7 @@ export default class ChatInput {
 
     if(richMessage?.input._ === 'inputRichMessage') {
       try {
-        const validation = await rootScope.managers.appMessagesManager.validateRichMessage(richMessage.input);
+        const validation = await managers.appMessagesManager.validateRichMessage(richMessage.input);
         if(showRichMessageValidationError(validation)) return false;
       } catch{
         toastNew({langPackKey: 'RichMessage.Error.ResourcesUnavailable'});
@@ -4901,12 +5283,14 @@ export default class ChatInput {
       }
     }
 
-    let messageCount = 0;
+    let messageCount = media ? 1 : 0;
     if(forwarding) {
       for(const fromPeerId in forwarding) messageCount += forwarding[fromPeerId].length;
     }
-    const config = await rootScope.managers.apiManager.getConfig();
+    const config = await managers.apiManager.getConfig();
     const MAX_LENGTH = config.message_length_max;
+    // * what of the text goes as a dice rather than a message, for the text that media follows (below)
+    const diceEmojis = media && !richMessage ? (await managers.apiManager.getAppConfig()).emojies_send_dice : undefined;
     const textOverflow = !richMessage && value.length > MAX_LENGTH;
     const textMessageCount = richMessage ? 1 : trimmedValue ? splitStringByLength(value, MAX_LENGTH).length : 0;
     messageCount += textMessageCount;
@@ -4938,7 +5322,7 @@ export default class ChatInput {
       const mids = forwarding[fromPeerId];
       if(mids.length !== 1) continue;
       lookups.push(Promise.resolve(
-        rootScope.managers.appMessagesManager.getMessageByPeer(fromPeerId.toPeerId(), mids[0])
+        managers.appMessagesManager.getMessageByPeer(fromPeerId.toPeerId(), mids[0])
       ).then((message) => {
         forwardedAlone.set(fromPeerId, message as Message.message);
       }));
@@ -4951,17 +5335,36 @@ export default class ChatInput {
     }
 
     if(sendsText) {
-      rootScope.managers.appMessagesManager.sendText({
-        ...sendTextParams,
-        ...sendingParams,
-        text: value,
-        entities,
-        richMessage,
-        noWebPage: richMessage ? true : sendTextParams.noWebPage,
-        webPage: richMessage ? undefined : sendTextParams.webPage,
-        webPageOptions: richMessage ? undefined : sendTextParams.webPageOptions,
-        invertMedia: richMessage ? undefined : sendTextParams.invertMedia
+      // * with media after it, the text is sent part by part from here, and a part that is a dice emoji as
+      // * the dice: sendText queues the parts after the first, and a dice, a step later, and the media sent
+      // * alongside came between them
+      const parts = media && !richMessage ? splitStringByLength(value, MAX_LENGTH) : [value];
+      let offset = 0;
+      parts.forEach((part, index) => {
+        const start = offset;
+        offset += part.length;
+        const dice = diceEmojis?.includes(part.trim()) && part.trim();
+        if(dice) {
+          managers.appMessagesManager.sendOther({...sendingParams, inputMedia: {_: 'inputMediaDice', emoticon: dice}});
+          return;
+        }
+
+        managers.appMessagesManager.sendText({
+          ...sendTextParams,
+          ...sendingParams,
+          text: part,
+          entities: parts.length > 1 ? sliceMessageEntities(entities, start, part.length) : entities,
+          richMessage,
+          noWebPage: richMessage ? true : sendTextParams.noWebPage,
+          webPage: richMessage || index ? undefined : sendTextParams.webPage,
+          webPageOptions: richMessage ? undefined : sendTextParams.webPageOptions,
+          invertMedia: richMessage ? undefined : sendTextParams.invertMedia
+        });
       });
+    }
+
+    if(media) {
+      managers.appMessagesManager.sendOther({...sendingParams, inputMedia: media});
     }
 
     for(const fromPeerId in forwarding) {
@@ -4970,11 +5373,11 @@ export default class ChatInput {
       if(msg) {
         if(msg.pFlags?.fakeForSavedMusic) {
           const doc = (msg.media as MessageMedia.messageMediaDocument).document as MyDocument;
-          rootScope.managers.appMessagesManager.sendOther({
+          managers.appMessagesManager.sendOther({
             ...sendingParams,
             inputMedia: {_: 'inputMediaDocument', id: getDocumentInput(doc), pFlags: {}}
           });
-          rootScope.managers.appMessagesManager.deleteMessageFromHistoryStorage(
+          managers.appMessagesManager.deleteMessageFromHistoryStorage(
             fromPeerId.toPeerId(),
             mids[0]
           );
@@ -4982,7 +5385,7 @@ export default class ChatInput {
         }
       }
 
-      rootScope.managers.appMessagesManager.forwardMessages({
+      managers.appMessagesManager.forwardMessages({
         ...forwardParams,
         ...sendingParams,
         fromPeerId: fromPeerId.toPeerId(),
@@ -5057,6 +5460,14 @@ export default class ChatInput {
       return;
     }
 
+    // * asked only of what is there to send
+    if(
+      (!this.isInputEmpty() || this.forwarding) &&
+      (!(await this.isSendingConfirmed()) || !isCurrent())
+    ) {
+      return;
+    }
+
     const sendingParams: MessageSendingParams = {
       ...chat.getMessageSendingParams(),
       scheduleDate: flags.scheduleDate,
@@ -5084,7 +5495,8 @@ export default class ChatInput {
         dropAuthor: !this.forwardingHasProtectedRichMessages &&
           this.forwardElements &&
           this.forwardElements.hideSender.checkboxField.checked,
-        dropCaptions: !this.forwardingHasProtectedRichMessages && this.isDroppingCaptions()
+        dropCaptions: !this.forwardingHasProtectedRichMessages && this.isDroppingCaptions(),
+        videoTimestamp: this.forwardingVideoTimestamp
       } : undefined,
       sendTextParams: {
         noWebPage: this.noWebPage,
@@ -5103,12 +5515,21 @@ export default class ChatInput {
           return;
         }
 
+        // its text flies into its message, when it goes alone as one
+        if(textMessages === 1 && !forwarding && !flags.scheduleDate && !ephemeral && !sendingParams.suggestedPost) {
+          chat.bubbles?.sendFlights?.captureText({
+            field: this.rowsWrapper,
+            input: this.messageInput,
+            reply: this.helperType === 'reply' ? this.replyElements?.container : undefined
+          });
+        }
+
         left = true;
         // the next press has a field of its own now, while the rest of this one goes
         this.sendingMessage = undefined;
         // the draft clears its text asks for come back after the field moved on to the next message
         if(textMessages && clearDraft && !ephemeral && !PEER_EXCEPTIONS.has(chat.type)) {
-          this.ownSends.push({clears: textMessages, until: Date.now() + OWN_DRAFT_CLEAR_TIMEOUT});
+          this.ownSends.push({clears: textMessages, until: Date.now() + OWN_DRAFT_CLEAR_TIMEOUT, saveRevision: this.draftSaveRevision});
         }
 
         this.forgetWebPage();
@@ -5186,6 +5607,11 @@ export default class ChatInput {
       this.forgetOwnSend(ownSend);
     }
 
+    // * the server's draft is cleared as the field was: holding nothing of its own yet, and having saved nothing since
+    // * (the next message, begun and saved and then erased, has its erasing still to save), the field is in step with it
+    if(ownSend.saveRevision === this.draftSaveRevision && !this.getCurrentInputAsDraft()) {
+      this.appliedInputDraft = {value: undefined};
+    }
     return true;
   }
 
@@ -5237,6 +5663,22 @@ export default class ChatInput {
       }
     }
     if(!isCurrent()) return;
+    if(!richMessage && (editValue.trim() || message.media)) {
+      // * as tdesktop: a text over the limit (a caption's, under media) is not sent but cut by the user, who is told by
+      // * how much - the server would only refuse it. What is counted is the text as it goes (editMessage parses its
+      // * markdown and trims it), by characters rather than UTF-16 units: an edit the server takes is never held back
+      const maxLength = !canUseRichMessage ?
+        await this.managers.apiManager.getLimit('caption') :
+        (await this.managers.apiManager.getConfig()).message_length_max;
+      if(!isCurrent()) return;
+      const [sentText] = parseMarkdown(editValue, editEntities?.map((entity) => ({...entity})));
+      const excess = [...sentText].length - maxLength;
+      if(excess > 0) {
+        toastNew({langPackKey: 'EditLimitReached', langPackArguments: [excess]});
+        return;
+      }
+    }
+
     if(richMessage || editValue.trim() || message.media) {
       try {
         await this.managers.appMessagesManager.editMessage(
@@ -5311,7 +5753,7 @@ export default class ChatInput {
     }
 
     if(document.sticker && getStickerEffectThumb(document) && !rootScope.premium && !ignoreNoPremium) {
-      showPremiumPopup({feature: 'premium_stickers'});
+      hotReloadGuard.showPremiumPopup({feature: 'premium_stickers'});
       return false;
     }
 
@@ -5324,11 +5766,20 @@ export default class ChatInput {
       return false;
     }
 
+    if(!(await this.isSendingConfirmed())) {
+      return false;
+    }
+
     if(!isEphemeral) {
       const preparedPaymentResult = await this.paidMessageInterceptor.prepareStarsForPayment(1);
       if(preparedPaymentResult === PAYMENT_REJECTED) return;
 
       sendingParams.confirmedPaymentResult = preparedPaymentResult;
+    }
+
+    // the sticker or the GIF flies from where it was chosen into its message
+    if(target && !isEphemeral && !sendingParams.scheduleDate) {
+      this.chat.bubbles?.sendFlights?.captureDocument({target, document});
     }
 
     this.managers.appMessagesManager.sendFile({
@@ -5432,6 +5883,7 @@ export default class ChatInput {
         }
         this.editMsgId = mid;
         this.editMessage = message;
+        this.updateKeyboardPlaceholder();
         input = undefined;
         richMessage = undefined;
         // the limit plate steps aside for editing what is already there
@@ -5509,7 +5961,7 @@ export default class ChatInput {
     }
   }
 
-  public initMessagesForward(fromPeerIdsMids: {[fromPeerId: PeerId]: number[]}) {
+  public initMessagesForward(fromPeerIdsMids: {[fromPeerId: PeerId]: number[]}, videoTimestamp?: number) {
     const f = async() => {
       // const peerTitles: string[]
       const fromPeerIds = Object.keys(fromPeerIdsMids).map((fromPeerId) => fromPeerId.toPeerId());
@@ -5633,6 +6085,7 @@ export default class ChatInput {
 
       this.setCurrentHover(this.forwardHover, newReply);
       this.forwarding = fromPeerIdsMids;
+      this.forwardingVideoTimestamp = videoTimestamp;
     };
 
     f();
@@ -5818,6 +6271,7 @@ export default class ChatInput {
       this.replyIsEphemeral = false;
     }
     this.updateEphemeralComposer();
+    this.updateKeyboardPlaceholder();
     this.center(true);
   }
 
@@ -5839,6 +6293,7 @@ export default class ChatInput {
     if(type !== 'reply') {
       this.setReplyTo(undefined);
       this.forwarding = undefined;
+      this.forwardingVideoTimestamp = undefined;
       this.forwardingHasProtectedRichMessages = false;
     }
 
@@ -5856,6 +6311,7 @@ export default class ChatInput {
 
     this.editMsgId = this.editMessage = undefined;
     this.helperType = this.helperFunc = undefined;
+    this.updateKeyboardPlaceholder();
     if(this.welcomeLimitReached) void this.center(true);
     this.setCurrentHover();
     this.saveDraftDebounced();
@@ -6014,7 +6470,7 @@ export default class ChatInput {
       appNavigationController.pushItem(this.inputHelperNavigationItem = {
         type: 'input-helper',
         onPop: () => {
-          this.onHelperCancel();
+          this.onHelperCancelByUser();
         },
         context: this.chat
       });
@@ -6045,7 +6501,7 @@ export default class ChatInput {
     showSuggestPostPopup({HotReloadGuard: SolidJSHotReloadGuardProvider, suggestChange: !!initial?.changeMid, initialStars: initial?.stars, initialTimestamp: initial?.timestamp, onFinish: (payload) => {
       const balance = +useStars()() || 0;
       if(!this.chat.canManageDirectMessages && payload.stars && payload.stars > balance) {
-        showStarsPopup({spendPurposePeerId: this.chat.peerId});
+        hotReloadGuard.showStarsPopup({spendPurposePeerId: this.chat.peerId});
         return;
       }
 
@@ -6309,3 +6765,6 @@ export default class ChatInput {
     return !!this.editMessage?.grouped_id;
   }
 }
+
+// a method edited here takes effect on the open chats' inputs, without a reload (see @helpers/hotRegistry)
+if(import.meta.hot) import.meta.hot.accept();

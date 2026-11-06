@@ -22,6 +22,14 @@ import {
   userFullWithRating
 } from '../fixtures';
 
+// * a real photo: a real preview size also exercises the edit/spoiler/delete controls
+async function loadSandboxPhoto(name: string) {
+  const {CHAT_INPUT_EDITOR_TEST_MEDIA_URL} = await import('@components/chat/inputEditor/testData');
+  const response = await fetch(CHAT_INPUT_EDITOR_TEST_MEDIA_URL);
+  if(!response.ok) throw new Error('Sandbox media fixture could not be loaded');
+  return new File([await response.blob()], name, {type: 'image/jpeg'});
+}
+
 defineStories('Live streams', [false, true].map((active) => ({
   id: `rtmp/${active ? 'active' : 'start'}`,
   fixtureOnly: true,
@@ -66,12 +74,17 @@ defineStories('Composer & bots', [
     title: 'Attach media',
     open: async(ctx) => {
       const {default: showNewMediaPopup} = await import('@components/popups/newMedia');
-      // a real photo: a real preview size also exercises the edit/spoiler/delete controls
-      const {CHAT_INPUT_EDITOR_TEST_MEDIA_URL} = await import('@components/chat/inputEditor/testData');
-      const response = await fetch(CHAT_INPUT_EDITOR_TEST_MEDIA_URL);
-      if(!response.ok) throw new Error('Sandbox media fixture could not be loaded');
-      const file = new File([await response.blob()], 'sandbox-photo.jpg', {type: 'image/jpeg'});
-      showNewMediaPopup(ctx.chat(), [file], 'media');
+      showNewMediaPopup(ctx.chat(), [await loadSandboxPhoto('sandbox-photo.jpg')], 'media');
+    }
+  },
+  {
+    // an empty file is left out of what is sent, named in a toast (tdesktop's FileIsEmpty)
+    id: 'newMedia/empty',
+    fixtureOnly: true,
+    title: 'Attach media with an empty file',
+    open: async(ctx) => {
+      const {default: showNewMediaPopup} = await import('@components/popups/newMedia');
+      showNewMediaPopup(ctx.chat(), [await loadSandboxPhoto('sandbox-photo.jpg'), new File([], 'empty.txt', {type: 'text/plain'})], 'media');
     }
   },
   {
@@ -116,12 +129,13 @@ defineStories('Composer & bots', [
       showStickersPopup({_: 'inputStickerSetShortName', short_name: 'sandbox_stickers'});
     }
   })),
-  {
-    id: 'translate',
-    title: 'Translate a message',
+  // a chat that forbids copying shows the text with nothing to copy it by
+  ...[false, true].map((noForwards): Omit<PopupStory, 'group'> => ({
+    id: noForwards ? 'translate/noForwards' : 'translate',
+    title: noForwards ? 'Translate a message that cannot be copied' : 'Translate a message',
     managers: {
       appTranslationsManager: {
-        translateText: () => [{_: 'textWithEntities', text: 'Переведённый текст', entities: []}]
+        translateText: () => ({_: 'textWithEntities', text: 'Переведённый текст', entities: []})
       }
     },
     open: async(ctx) => {
@@ -133,10 +147,11 @@ defineStories('Composer & bots', [
       openTranslatePopup({
         peerId: ctx.peer('private'),
         message: ctx.message('private'),
-        detectedLanguage: 'en'
+        detectedLanguage: 'en',
+        noForwards
       }, HotReloadGuard);
     }
-  },
+  })),
   {
     // layer 229 in a page: rows of buttons, buttons inside the text, a folded quote, a compact
     // table. Read outside a message, only links, copying and profiles act; a callback is inert.
@@ -486,3 +501,73 @@ defineStories('Profile', (['username', 'phone'] as const).map((type) => ({
     showCollectibleInfoPopup(type === 'username' ? {peerId, username: 'sandbox'} : {peerId, phone: '88800809944'});
   }
 })));
+
+// the profile a click on a sender's avatar shows: its full peer, and the stories it looks up for the
+// photo (none); the rest of it is the default manager answers
+// * the profile is the sidebar's tab, shared media included: nothing in it, no stories, no channels
+// * like this one
+const peerProfileManagers = (getProfileByPeerId: (peerId: PeerId) => object) => ({
+  appProfileManager: {
+    getProfileByPeerId,
+    getProfile: (userId: UserId) => getProfileByPeerId(userId.toPeerId(false))
+  },
+  appMessagesManager: {
+    getSearchCounters: (peerId: PeerId, filters: {_: string}[]) => filters.map((filter) => ({
+      _: 'messages.searchCounter',
+      pFlags: {},
+      filter,
+      count: 0
+    }))
+  },
+  appChatsManager: {
+    getChannelRecommendations: () => ({_: 'messages.chats', chats: [] as any[]})
+  },
+  appStoriesManager: {
+    getPeerStories: (peerId: PeerId) => ({
+      _: 'peerStories',
+      pFlags: {},
+      peer: peerId.isUser() ?
+        {_: 'peerUser', user_id: peerId.toUserId()} :
+        {_: 'peerChannel', channel_id: peerId.toChatId()},
+      stories: [] as any[]
+    }),
+    getPinnedStories: () => ({count: 0, stories: [] as any[]}),
+    getStoriesArchive: () => ({count: 0, stories: [] as any[]})
+  }
+});
+
+defineStories('Profile', [
+  {
+    id: 'peerProfile/user',
+    title: 'Profile — a user',
+    managers: peerProfileManagers((peerId) => ({
+      _: 'userFull',
+      pFlags: {},
+      id: peerId.toUserId(),
+      about: 'Writes the sandbox stories',
+      settings: {_: 'peerSettings', pFlags: {}}
+    })),
+    open: async(ctx) => {
+      const {default: showPeerProfilePopup} = await import('@components/popups/peerProfile');
+      await showPeerProfilePopup({peerId: ctx.peer('private')});
+    }
+  },
+  {
+    id: 'peerProfile/channel',
+    title: 'Profile — a channel',
+    managers: peerProfileManagers((peerId) => ({
+      _: 'channelFull',
+      pFlags: {},
+      id: peerId.toChatId(),
+      about: 'News of the sandbox'
+    })),
+    open: async(ctx) => {
+      const {default: showPeerProfilePopup} = await import('@components/popups/peerProfile');
+      await showPeerProfilePopup({peerId: ctx.peer('channel')});
+    }
+  }
+]);
+
+// The sandbox reloads on an edit anyway (watchForEdits). Accepting here keeps an edit of a popup this story imports
+// from climbing through the story to the app's root once the sandbox has been opened on the dev server.
+if(import.meta.hot) import.meta.hot.accept();

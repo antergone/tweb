@@ -152,6 +152,424 @@ for(const linebreak of ['\n', '\r\n']) test(`pasted plain text keeps every line,
   expect((await page.evaluate(() => window.chatInputEditorHarness.value())).value).toBe(lines.join('\n'));
 });
 
+// the document's blocks and their text at a glance: paragraph("a") | bulletList(listItem(paragraph()))
+const shape = (page: Page) => page.evaluate(() => {
+  type Node = {type: string, text?: string, content?: Node[]};
+  const walk = (node: Node): string => node.type === 'text' ?
+    JSON.stringify(node.text) :
+    `${node.type}(${(node.content || []).map(walk).join(', ')})`;
+  return (window.chatInputEditorHarness.document().content as Node[]).map(walk).join(' | ');
+});
+
+/** Pastes into a field holding `line` (empty, or with the caret after its first character) */
+async function pasteInto(page: Page, line: string, clipboard: {html?: string, text?: string}) {
+  expect(await page.evaluate((line) => window.chatInputEditorHarness.setDocument({type: 'doc', content: [
+    {type: 'paragraph', content: line ? [{type: 'text', text: line}] : undefined}
+  ]}), line)).toBe(true);
+  await page.evaluate((position) => window.chatInputEditorHarness.setCaret(position), line ? 2 : 1);
+  expect(await page.evaluate((clipboard) => window.chatInputEditorHarness.pasteClipboard(clipboard), clipboard)).toBe(true);
+  return shape(page);
+}
+
+for(const direction of ['ltr', 'rtl'] as const) test(`pastes the plain selection when full-document HTML leaks source content (${direction})`, async({page}) => {
+  await page.evaluate((direction) => {
+    document.documentElement.dir = direction;
+    window.chatInputEditorHarness.setDirection(direction);
+  }, direction);
+  const text = 'Only the selected paragraph';
+  const html = '<meta charset="utf-8"><html><body><details open>' +
+    `<slot pseudo="details-content"><p>${text}</p></slot></details>` +
+    '<details><summary>Outside the selection</summary></details><footer>Footer</footer></body></html>';
+  expect(await pasteInto(page, '', {html, text})).toBe(`paragraph(${JSON.stringify(text)})`);
+  expect(await pasteInto(page, 'XY', {html, text})).toBe(`paragraph("X${text}Y")`);
+
+  await page.evaluate(() => window.chatInputEditorHarness.setDocument({type: 'doc', content: [{type: 'codeBlock'}]}));
+  const code = '  first\n    second';
+  expect(await page.evaluate((text) => window.chatInputEditorHarness.pasteClipboard({
+    html: `<html><body><pre>${text}</pre><footer>Footer</footer></body></html>`, text
+  }), code)).toBe(true);
+  expect(await shape(page)).toBe(`codeBlock(${JSON.stringify(code)})`);
+
+  await page.evaluate(() => window.chatInputEditorHarness.setDocument({type: 'doc', content: [{type: 'paragraph'}]}));
+  expect(await page.evaluate(() => window.chatInputEditorHarness.insertStructuralBlock('table'))).toBe(true);
+  expect(await page.evaluate(() => window.chatInputEditorHarness.setCaretInNode('paragraph', 0))).toBe(true);
+  expect(await page.evaluate(({html, text}) => window.chatInputEditorHarness.pasteClipboard({html, text}), {html, text})).toBe(true);
+  expect((await page.evaluate(() => window.chatInputEditorHarness.value())).value.trim()).toBe(text);
+  expect(await page.evaluate(() => window.chatInputEditorHarness.document().content[0].type)).toBe('chatTableWrapper');
+
+  await pasteInto(page, '', {
+    html: `<html><body><p><strong>${text}</strong></p><noscript>fallback</noscript><object>fallback</object></body></html>`, text
+  });
+  expect((await page.evaluate(() => window.chatInputEditorHarness.value())).entities)
+  .toContainEqual({_: 'messageEntityBold', offset: 0, length: text.length});
+
+  for(const {text, value, entity} of [
+    {text: '**bold**', value: 'bold', entity: 'messageEntityBold'},
+    {text: '__italic__', value: 'italic', entity: 'messageEntityItalic'}
+  ]) {
+    await pasteInto(page, '', {html: '<p data-pm-slice="1 1 []">internal</p>', text: 'internal'});
+    await pasteInto(page, '', {
+      html: `<html><body><p>${text}</p><footer>Footer</footer></body></html>`, text
+    });
+    expect(await page.evaluate(() => window.chatInputEditorHarness.value())).toMatchObject({
+      value, entities: [{_: entity, offset: 0, length: value.length}]
+    });
+  }
+});
+
+for(const direction of ['ltr', 'rtl'] as const) test(`pastes a selected HTML fragment without its source page (${direction})`, async({page}) => {
+  await page.evaluate((direction) => {
+    document.documentElement.dir = direction;
+    window.chatInputEditorHarness.setDirection(direction);
+  }, direction);
+  const text = 'Only the selected paragraph';
+  const html = '<html><head><title>Source page</title></head><body>' +
+    '<h2>Before the selection</h2>' +
+    `<!--StartFragment--><p><strong>${text}</strong></p><!--EndFragment-->` +
+    '<h2>After the selection</h2><p>Other page content</p></body></html>';
+
+  expect(await pasteInto(page, '', {html, text})).toBe(`paragraph(${JSON.stringify(text)})`);
+  expect(await page.evaluate(() => window.chatInputEditorHarness.value())).toMatchObject({
+    value: text,
+    entities: [{_: 'messageEntityBold', offset: 0, length: text.length}]
+  });
+  expect(await pasteInto(page, 'XY', {html, text})).toBe(`paragraph("X", ${JSON.stringify(text)}, "Y")`);
+
+  await pasteInto(page, '', {
+    html: '<ol reversed><li>Outside the selection</li><!--StartFragment-->' +
+      '<li>two</li><li>one</li><!--EndFragment--></ol>',
+    text: '2. two\n1. one'
+  });
+  expect(await page.evaluate(() => window.chatInputEditorHarness.document().content[0])).toMatchObject({
+    type: 'orderedList',
+    attrs: {start: 2, reversed: true},
+    content: [{type: 'listItem'}, {type: 'listItem'}]
+  });
+
+  await pasteInto(page, '', {
+    html: '<ol start="4"><li>Skipped</li><li><p><!--StartFragment-->item</p></li></ol>' +
+      '<p>tail<!--EndFragment--></p>',
+    text: '5. item\ntail'
+  });
+  expect(await page.evaluate(() => window.chatInputEditorHarness.document().content[0])).toMatchObject({
+    type: 'orderedList', attrs: {start: 5}, content: [{type: 'listItem'}]
+  });
+
+  await pasteInto(page, '', {
+    html: '<pre><code>Before<!--StartFragment-->  first\n    second<!--EndFragment-->After</code></pre>',
+    text: '  first\n    second'
+  });
+  expect(await page.evaluate(() => window.chatInputEditorHarness.document().content[0])).toMatchObject({
+    type: 'codeBlock', content: [{type: 'text', text: '  first\n    second'}]
+  });
+
+  await pasteInto(page, '', {
+    html: '<table><tr><td><p>Before<!--StartFragment-->cell<!--EndFragment-->After</p></td></tr></table>',
+    text: 'cell'
+  });
+  expect(await page.evaluate(() => window.chatInputEditorHarness.document().content[0].type)).toBe('chatTableWrapper');
+  expect((await page.evaluate(() => window.chatInputEditorHarness.value())).value).toBe('cell');
+
+  await pasteInto(page, '', {
+    html: '<style>h2 + .copied-fragment {font-weight: bold}</style><p>Before</p><h2>Context</h2>' +
+      '<!--StartFragment--><p class="copied-fragment">styled</p><!--EndFragment--><p>After</p>' +
+      '<style>.copied-fragment {font-style: italic}</style>',
+    text: 'styled'
+  });
+  const styled = await page.evaluate(() => window.chatInputEditorHarness.value());
+  expect(styled.value).toBe('styled');
+  expect(styled.entities).toEqual(expect.arrayContaining([
+    {_: 'messageEntityBold', offset: 0, length: 6},
+    {_: 'messageEntityItalic', offset: 0, length: 6}
+  ]));
+
+  await pasteInto(page, '', {
+    html: '<!--StartFragment--><ol><li>first</li><li>second</li></ol><!--EndFragment-->',
+    text: '1. first\n2. second'
+  });
+  expect(await page.evaluate(() => window.chatInputEditorHarness.document().content[0].attrs.startExplicit)).toBe(false);
+  expect(await page.evaluate(() => window.chatInputEditorHarness.setNodeAttributes('orderedList', 0, {reversed: true}))).toBe(true);
+  expect((await page.evaluate(() => window.chatInputEditorHarness.value())).value).toBe('2. first\n1. second');
+
+  await pasteInto(page, '', {
+    html: '<!--StartFragment--><tr><td class="copied-cell">A</td><td>B</td></tr><!--EndFragment-->' +
+      '<style>table .copied-cell {font-weight: bold}</style>',
+    text: 'A\tB'
+  });
+  expect(await page.evaluate(() => window.chatInputEditorHarness.document().content[0].type)).toBe('chatTableWrapper');
+  const cells = await page.evaluate(() => window.chatInputEditorHarness.value());
+  expect(cells.value).toBe('A B');
+  expect(cells.entities).toContainEqual({_: 'messageEntityBold', offset: 0, length: 1});
+
+  expect(await page.evaluate(() => window.chatInputEditorHarness.setCaretInNode('paragraph', 0))).toBe(true);
+  expect(await page.evaluate(() => window.chatInputEditorHarness.pasteClipboard({
+    html: '<!--StartFragment--><tr><td>C</td><td>D</td></tr><!--EndFragment-->',
+    text: 'C\tD'
+  }))).toBe(true);
+  expect((await page.evaluate(() => window.chatInputEditorHarness.value())).value).toBe('C D');
+
+  for(const part of [
+    '<tr><td style="font-weight: 400; text-decoration: underline">E</td><td>F</td></tr>',
+    '<td style="font-weight: 400; text-decoration: underline">E</td><td>F</td>'
+  ]) {
+    expect(await page.evaluate(() => window.chatInputEditorHarness.setCaretInNode('paragraph', 0))).toBe(true);
+    expect(await page.evaluate((part) => window.chatInputEditorHarness.pasteClipboard({
+      html: `<!--StartFragment-->${part}<!--EndFragment-->` +
+        '<style>table {font-weight: bold} tbody {font-style: italic}</style>',
+      text: 'E\tF'
+    }), part)).toBe(true);
+    const styledCells = await page.evaluate(() => window.chatInputEditorHarness.value());
+    expect(styledCells.value).toBe('E F');
+    const hasMarkAt = (type: MessageEntity['_'], offset: number) => styledCells.entities.some(
+      (entity) => entity._ === type && entity.offset <= offset && entity.offset + entity.length > offset
+    );
+    expect(hasMarkAt('messageEntityItalic', 0)).toBe(true);
+    expect(hasMarkAt('messageEntityBold', 0)).toBe(false);
+    expect(hasMarkAt('messageEntityUnderline', 0)).toBe(true);
+    expect(hasMarkAt('messageEntityBold', 2)).toBe(true);
+  }
+});
+
+test('pastes stylesheet-formatted HTML across document realms', async({page}) => {
+  const value = await page.evaluate(async() => {
+    const {default: createEditor} = await window.e2eImport('/src/components/chat/inputEditor/index.ts') as
+      typeof import('@components/chat/inputEditor');
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const input = frame.contentDocument.createElement('div');
+    input.className = 'input-message-input';
+    frame.contentDocument.body.append(input);
+    const editor = createEditor(input, {enableBlockSelection: false});
+    try {
+      const event = new Event('paste', {bubbles: true, cancelable: true});
+      Object.defineProperty(event, 'clipboardData', {value: {
+        getData: (type: string) => type === 'text/html' ?
+          '<style>.foreign-fragment {font-weight: bold}</style>' +
+          '<!--StartFragment--><p class="foreign-fragment">styled</p><!--EndFragment-->' :
+          type === 'text/plain' ? 'styled' : ''
+      }});
+      input.dispatchEvent(event);
+      return editor.getRichValue();
+    } finally {
+      editor.destroy();
+      frame.remove();
+    }
+  });
+  expect(value.value).toBe('styled');
+  expect(value.entities).toContainEqual({_: 'messageEntityBold', offset: 0, length: 6});
+});
+
+// what a browser copies of the block a selection ends at the start of: the element, empty
+for(const [name, block] of [
+  ['list', '<ol></ol>'],
+  ['list item', '<ul class="List"><li class="ListItem"></li></ul>'],
+  ['quote', '<blockquote></blockquote>'],
+  ['table', '<table><tbody><tr><td></td></tr></tbody></table>']
+]) test(`a copy that ends where a ${name} begins pastes without an empty one`, async({page}) => {
+  const clipboard = {html: `<p>Some text</p>${block}<br class="Apple-interchange-newline">`, text: 'Some text\n\n'};
+  expect(await pasteInto(page, '', clipboard)).toBe('paragraph("Some text")');
+  // as a copy ending at the end of the text pastes
+  expect(await pasteInto(page, 'XY', clipboard)).toBe('paragraph("XSome textY")');
+});
+
+const LIST_DOCUMENT = {type: 'doc', content: [
+  {type: 'paragraph', content: [{type: 'text', text: 'Some text'}]},
+  {type: 'bulletList', content: ['one', 'two'].map((text) => (
+    {type: 'listItem', content: [{type: 'paragraph', content: [{type: 'text', text}]}]}
+  ))},
+  {type: 'paragraph', content: [{type: 'text', text: 'After'}]}
+]};
+
+// an empty line of the field, as its copy writes one
+const hasEmptyLine = (html: string) => /<div[^>]*data-chat-input-paragraph=""[^>]*><\/div>/.test(html);
+
+// positions: "Some text" 1-10, the first item's text 14-17, the second's 21-24, "After" 28-33
+for(const {name, from, to, text, empty, inLine} of [
+  {
+    name: 'from a line to the start of a list', from: 1, to: 14, text: 'Some text',
+    empty: 'paragraph("Some text")', inLine: 'paragraph("XSome textY")'
+  },
+  {
+    name: 'from an item to the start of the next one', from: 14, to: 21, text: 'one',
+    empty: 'bulletList(listItem(paragraph("one")))', inLine: 'paragraph("XoneY")'
+  },
+  {
+    name: 'from the end of a list into the next line', from: 24, to: 33, text: 'After',
+    empty: 'paragraph("After")', inLine: 'paragraph("XAfterY")'
+  }
+]) test(`a copy out of the field ${name} holds no empty item, and pastes without one`, async({page}) => {
+  expect(await page.evaluate((document) => window.chatInputEditorHarness.setDocument(document), LIST_DOCUMENT)).toBe(true);
+  await page.evaluate(({from, to}) => window.chatInputEditorHarness.setTextSelection(from, to), {from, to});
+  const copied = await page.evaluate(() => window.chatInputEditorHarness.clipboard());
+  // the lines it holds, without the break it only crossed at its edge
+  expect(copied.text).toBe(text);
+  expect(hasEmptyLine(copied.html)).toBe(false);
+  expect(await pasteInto(page, '', copied)).toBe(empty);
+  expect(await pasteInto(page, 'XY', copied)).toBe(inLine);
+});
+
+test('a copy out of the field that ends where a nested list begins holds its item alone', async({page}) => {
+  expect(await page.evaluate(() => window.chatInputEditorHarness.setDocument({type: 'doc', content: [{type: 'bulletList', content: [
+    {type: 'listItem', content: [
+      {type: 'paragraph', content: [{type: 'text', text: 'one'}]},
+      {type: 'bulletList', content: [{type: 'listItem', content: [{type: 'paragraph', content: [{type: 'text', text: 'nested'}]}]}]}
+    ]}
+  ]}]}))).toBe(true);
+  // "one" is 3-6, the nested item's text starts at 10
+  await page.evaluate(() => window.chatInputEditorHarness.setTextSelection(3, 10));
+  const copied = await page.evaluate(() => window.chatInputEditorHarness.clipboard());
+  expect(copied.text).toBe('one');
+  expect(hasEmptyLine(copied.html)).toBe(false);
+  expect(await pasteInto(page, '', copied)).toBe('bulletList(listItem(paragraph("one")))');
+  expect(await pasteInto(page, 'XY', copied)).toBe('paragraph("XoneY")');
+});
+
+test('a copy out of the field keeps an empty item it took whole before the one it ends at', async({page}) => {
+  expect(await page.evaluate(() => window.chatInputEditorHarness.setDocument({type: 'doc', content: [
+    {type: 'bulletList', content: ['one', '', 'two'].map((text) => (
+      {type: 'listItem', content: [{type: 'paragraph', content: text ? [{type: 'text', text}] : undefined}]}
+    ))}
+  ]}))).toBe(true);
+  // "one" is 3-6, the empty item's line 10, "two" starts at 14
+  await page.evaluate(() => window.chatInputEditorHarness.setTextSelection(3, 14));
+  const copied = await page.evaluate(() => window.chatInputEditorHarness.clipboard());
+  expect(await pasteInto(page, '', copied)).toBe('bulletList(listItem(paragraph("one")), listItem(paragraph()))');
+});
+
+test('a copy out of the field begun at the end of a numbered item keeps the next one\'s number', async({page}) => {
+  expect(await page.evaluate(() => window.chatInputEditorHarness.setDocument({type: 'doc', content: [
+    {type: 'orderedList', attrs: {start: 3}, content: ['a', 'b'].map((text) => (
+      {type: 'listItem', content: [{type: 'paragraph', content: [{type: 'text', text}]}]}
+    ))}
+  ]}))).toBe(true);
+  // "a" is 3-4, "b" 8-9
+  await page.evaluate(() => window.chatInputEditorHarness.setTextSelection(4, 9));
+  const copied = await page.evaluate(() => window.chatInputEditorHarness.clipboard());
+  expect(copied.text).toBe('b');
+  expect(hasEmptyLine(copied.html)).toBe(false);
+  expect(await pasteInto(page, '', copied)).toBe('orderedList(listItem(paragraph("b")))');
+  expect(await page.evaluate(() => window.chatInputEditorHarness.document().content[0].attrs.start)).toBe(4);
+});
+
+test('an empty block inside what is pasted stays, as the copy has it, and a checklist item\'s box anywhere', async({page}) => {
+  expect(await pasteInto(page, '', {html: '<p>a</p><ul><li></li></ul><p>b</p>', text: 'a\n\nb'}))
+  .toBe('paragraph("a") | bulletList(listItem(paragraph())) | paragraph("b")');
+  for(const item of ['<li><input type="checkbox" checked></li>', '<li data-checkbox="true" data-checked="true"><p></p></li>']) {
+    expect(await pasteInto(page, '', {html: `<p>a</p><ul>${item}</ul>`, text: 'a\n\n'}), item)
+    .toMatch(/^paragraph\("a"\) \| \w+\(\w+\(paragraph\(\)\)\)$/);
+  }
+});
+
+test('paragraphs pasted from a page keep the blank line between them that their plain text has', async({page}) => {
+  // as a page built on Tailwind copies: no margins of their own, kept apart by their container
+  const style = 'style="box-sizing: border-box; border: 0px solid; margin: 0px; white-space: normal;"';
+  expect(await pasteInto(page, '', {
+    html: `<meta charset="utf-8"><p ${style}>One paragraph.</p><p ${style}>Second <strong>bold</strong> one.</p>`,
+    text: 'One paragraph.\n\nSecond bold one.'
+  })).toBe('paragraph("One paragraph.") | paragraph() | paragraph("Second ", "bold", " one.")');
+  const pasted = await page.evaluate(() => window.chatInputEditorHarness.value());
+  expect(pasted.value).toBe('One paragraph.\n\nSecond bold one.');
+  expect(pasted.entities).toEqual([{_: 'messageEntityBold', offset: 23, length: 4}]);
+
+  // a document with no spacing: its plain text has them as lines
+  const docs = (text: string) => `<p dir="ltr" style="line-height:1.38;margin-top:0pt;margin-bottom:0pt;"><span>${text}</span></p>`;
+  expect(await pasteInto(page, '', {html: `<b style="font-weight:normal;">${docs('One')}${docs('Two')}</b>`, text: 'One\nTwo'}))
+  .toBe('paragraph("One") | paragraph("Two")');
+  // an empty one between is the blank line already
+  expect(await pasteInto(page, '', {html: '<p>a</p><p><br></p><p>b</p>', text: 'a\n\n\n\nb'}))
+  .toBe('paragraph("a") | paragraph() | paragraph("b")');
+  // each pair as its own plain text has it: lines, then a blank line written as an empty paragraph
+  expect(await pasteInto(page, '', {
+    html: `<b style="font-weight:normal;">${docs('One')}${docs('Two')}<p><br></p>${docs('Three')}</b>`,
+    text: 'One\nTwo\n\nThree'
+  })).toBe('paragraph("One") | paragraph("Two") | paragraph() | paragraph("Three")');
+  // a line break in a paragraph's HTML source is a space, as the page shows it
+  await pasteInto(page, '', {html: '<p>First\n\npart</p><p>Second</p><p>Third</p>', text: 'First part\nSecond\n\nThird'});
+  expect((await page.evaluate(() => window.chatInputEditorHarness.value())).value).toBe('First part\nSecond\n\nThird');
+  // a heading's words before them are the heading's, not the first paragraph's
+  expect(await pasteInto(page, '', {html: '<h2>One</h2><p>One</p><p>Two</p>', text: 'One\n\nOne\nTwo'}))
+  .toBe('heading("One") | paragraph("One") | paragraph("Two")');
+  // a list's marker in the plain text is no paragraph's word
+  expect(await pasteInto(page, '', {html: '<ol><li><p>1</p><p>1</p><p>X</p></li></ol>', text: '1. 1\n\n1\nX'}))
+  .toBe('orderedList(listItem(paragraph("1"), paragraph(), paragraph("1"), paragraph("X")))');
+  // nor when it reads the same as the paragraph's word
+  expect(await pasteInto(page, '', {html: '<ol><li><p>1.</p><p>1.</p><p>X</p></li></ol>', text: '1. 1.\n\n1.\nX'}))
+  .toBe('orderedList(listItem(paragraph("1."), paragraph(), paragraph("1."), paragraph("X")))');
+  // nor with an anchor written into the paragraph's word, which has no text of its own
+  expect(await pasteInto(page, '', {html: '<ol><li><p>1<a name="target"></a></p><p>1</p><p>X</p></li></ol>', text: '1. 1\n\n1\nX'}))
+  .toMatch(/^orderedList\(listItem\(paragraph\("1".*\), paragraph\(\), paragraph\("1"\), paragraph\("X"\)\)\)$/);
+  // lines, then paragraphs apart, in one copy
+  expect(await pasteInto(page, '', {html: '<p>One</p><p>Two</p><p>Three<br>more</p>', text: 'One\nTwo\n\nThree\nmore'}))
+  .toBe('paragraph("One") | paragraph("Two") | paragraph() | paragraph("Three", hardBreak(), "more")');
+  // a <br> at the start of the next one, or kept at the end of the one before, is the blank line
+  // already (ProseMirror drops a block's last <br>)
+  for(const html of [
+    '<p>One</p><p><br>Two</p>',
+    '<p>One<br><br></p><p>Two</p>',
+    // kept alone too: in an inline parent, or before more of the paragraph
+    '<p>One<span><br></span></p><p>Two</p>',
+    '<p>One<br> </p><p>Two</p>',
+    '<p>One<br><span></span></p><p>Two</p>'
+  ]) {
+    await pasteInto(page, '', {html, text: 'One\n\nTwo'});
+    expect((await page.evaluate(() => window.chatInputEditorHarness.value())).value, html).toBe('One\n\nTwo');
+  }
+  // a custom emoji before such a <br> is the paragraph's content, not a blank before it
+  const emoji = '<span data-sticker-emoji="🔥" data-doc-id="42"></span>';
+  for(const [html, value] of [
+    [`<p>One</p><p>${emoji}<br>Two</p>`, 'One\n\n🔥\nTwo'],
+    [`<p>One</p><p>${emoji}</p>`, 'One\n\n🔥'],
+    // while an empty wrapper of formatting is nothing
+    ['<p>One</p><p><span></span><br>Two</p>', 'One\n\nTwo'],
+    // a word an emoji is written into is the same word: lines, then a blank line
+    [`<p>One${emoji}</p><p>Two</p><p>Three</p>`, 'One🔥\nTwo\n\nThree']
+  ]) {
+    await pasteInto(page, '', {html, text: value});
+    expect((await page.evaluate(() => window.chatInputEditorHarness.value())).value, html).toBe(value);
+  }
+});
+
+test('a paste with nothing the field can hold changes nothing', async({page}) => {
+  expect(await pasteInto(page, 'XY', {html: '<span></span>', text: ''})).toBe('paragraph("XY")');
+});
+
+test('lines copied out of a rich message\'s bubble paste back as lines', async({page}) => {
+  // a message draws its paragraphs as the field does, with the same classes
+  const html = await page.evaluate(() => {
+    const classes = document.querySelector('#editor [data-chat-input-paragraph]').className;
+    return `<p class="${classes}">One</p><p class="${classes}">Two</p>`;
+  });
+  expect(await pasteInto(page, '', {html, text: 'One\n\nTwo'})).toBe('paragraph("One") | paragraph("Two")');
+});
+
+for(const [name, html, end, expected] of [
+  ['up to a list', '<p id="from">Some text</p><ul><li id="to">item one</li><li>item two</li></ul>', 0, 'paragraph("Some text")'],
+  // as the Claude app draws paragraphs: no margins, a gap between them
+  [
+    'of two paragraphs',
+    '<style>.md{display:grid;gap:16px}.md p{margin:0}</style><div class="md"><p id="from">One <b>bold</b>.</p><p id="to">Two.</p></div>',
+    4,
+    'paragraph("One ", "bold", ".") | paragraph() | paragraph("Two.")'
+  ]
+] as const) test(`a page's text copied ${name} pastes as the page shows it`, async({page, browserName}) => {
+  test.skip(browserName !== 'chromium', 'clipboard permissions are granted over CDP');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.evaluate(({html, end}) => {
+    const host = document.body.appendChild(document.createElement('div'));
+    host.style.userSelect = 'text';
+    host.innerHTML = html;
+    const range = document.createRange();
+    range.setStart(host.querySelector('#from').firstChild, 0);
+    range.setEnd(host.querySelector('#to').firstChild, end);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  }, {html, end});
+  await page.keyboard.press('ControlOrMeta+c');
+  await page.locator('#editor').focus();
+  await page.keyboard.press('ControlOrMeta+v');
+  await expect.poll(() => shape(page)).toBe(expected);
+});
+
 test('a message copied from the chat pastes back with its lines and spaces', async({page}) => {
   const text = 'Order !!!\n\n\n\nHere:  two spaces  \n  indented\nCash on delivery';
   const copied = await page.evaluate((text) => window.chatInputEditorHarness.messageClipboard({text, entities: []}), text);

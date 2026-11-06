@@ -97,6 +97,7 @@ const ENTITY_DIRECTIONS: {[type in MessageEntity['_']]?: 'ltr' | 'auto'} = {
   messageEntityUrl: 'ltr',
   messageEntityEmail: 'ltr',
   messageEntityPhone: 'ltr',
+  messageEntityBankCard: 'ltr',
   messageEntityBotCommand: 'ltr',
   messageEntityMention: 'ltr',
   messageEntityCashtag: 'ltr',
@@ -470,6 +471,38 @@ export default function wrapRichText(text: string, options: WrapRichTextOptions 
         break;
       }
 
+      // a click opens the card's menu: its number to copy, and what the server knows of it
+      // (`onBankCardClick`, tdesktop's BankCardClickHandler)
+      case 'messageEntityBankCard': {
+        if(!(options.noLinks && !passEntities[entity._]) && !options.wrappingDraft) {
+          element = document.createElement('a');
+          element.classList.add('bank-card');
+          (element as HTMLAnchorElement).href = '#';
+          element.dataset.bankCard = fullEntityText;
+          element.setAttribute('aria-haspopup', 'menu');
+          element.setAttribute('aria-expanded', 'false');
+          element.setAttribute('onclick', 'onBankCardClick(this, event)');
+        }
+        break;
+      }
+
+      // * a TON wallet address the server marked: a click opens what can be done with it (wallet/addressMenu);
+      // * the link itself starts a transfer to it, for wherever the menu is not. Plain text while nothing handles it:
+      // * the menu's handler is there only once the wallet is released (lib/wallet/release)
+      case 'messageEntityTonAddress': {
+        if(!options.noLinks && (window as any).openTonAddress) {
+          element = document.createElement('a');
+          element.classList.add('ton-address');
+          (element as HTMLAnchorElement).href = encodeEntities('tg://sendgrams?to=' + encodeURIComponent(fullEntityText));
+          if(!contextExternal) {
+            element.setAttribute('onclick', 'openTonAddress(this)');
+            element.setAttribute('aria-haspopup', 'menu');
+          }
+        }
+
+        break;
+      }
+
       case 'messageEntityBotCommand': {
         // if(!(options.noLinks || options.noCommands || contextExternal)/*  && !entity.unsafe */) {
         if(!options.noLinks && passEntities[entity._]) {
@@ -599,8 +632,8 @@ export default function wrapRichText(text: string, options: WrapRichTextOptions 
       }
 
       case 'messageEntityLinebreak': {
-        // The block boundary replaces one separator in messages and drafts.
-        if(options.ignoreNextIndex === nasty.i || (!options.noTextFormat && nextEntity?._ === 'messageEntityBlockquote' && nextEntity.offset === endOffset)) {
+        // The block boundary replaces one separator in drafts.
+        if(options.ignoreNextIndex === nasty.i || (options.wrappingDraft && !options.noTextFormat && nextEntity?._ === 'messageEntityBlockquote' && nextEntity.offset === endOffset)) {
           usedText = true;
         } else if(options.wrappingDraft && IS_FIREFOX) {
           element = document.createElement('br');
